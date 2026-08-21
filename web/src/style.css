@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --color-brand-50: #f0fdf4;
+  --color-brand-100: #dcfce7;
+  --color-brand-200: #bbf7d0;
+  --color-brand-300: #86efac;
+  --color-brand-400: #4ade80;
+  --color-brand-500: #22c55e;
+  --color-brand-600: #16a34a;
+  --color-brand-700: #15803d;
+  --color-ink-950: #0b1210;
+}
+
+:root {
+  color: #18221e;
+  background: #f4f7f5;
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+html.dark {
+  color: #e7eee9;
+  background: #0b100e;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+::selection { background: #bbf7d0; color: #14532d; }
+
+@layer components {
+  .surface {
+    @apply border border-slate-200/90 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-white/9 dark:bg-[#121815];
+  }
+  .card {
+    @apply rounded-xl border border-slate-200/90 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-white/9 dark:bg-[#121815];
+  }
+  .field {
+    @apply h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-500 focus:ring-3 focus:ring-brand-500/12 dark:border-white/10 dark:bg-white/4 dark:text-slate-100 dark:placeholder:text-slate-500;
+  }
+  .btn {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25 disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25 disabled:opacity-45 border-brand-600 bg-brand-600 text-white hover:border-brand-700 hover:bg-brand-700 active:translate-y-px;
+  }
+  .btn-secondary {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25 disabled:opacity-45 border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/10 dark:bg-white/4 dark:text-slate-200 dark:hover:bg-white/7;
+  }
+  .btn-danger {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25 disabled:opacity-45 border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300;
+  }
+  .icon-button {
+    @apply inline-flex size-9 items-center justify-center rounded-lg border border-transparent text-slate-500 transition hover:border-slate-200 hover:bg-white hover:text-slate-800 dark:text-slate-400 dark:hover:border-white/10 dark:hover:bg-white/5 dark:hover:text-white;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold tracking-[0.14em] text-brand-700 uppercase dark:text-brand-400;
+  }
+  .section-title {
+    @apply text-base font-semibold text-slate-900 dark:text-white;
+  }
+}
+
+@keyframes pulse-soft { 50% { opacity: .45; } }
+.animate-pulse-soft { animation: pulse-soft 1.5s ease-in-out infinite; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgb(148 163 184 / .42); border: 2px solid transparent; border-radius: 8px; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }

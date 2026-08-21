@@ -1,0 +1,23 @@
+# Build outputs
+web/node_modules/
+web/dist/
+server/webadbcontrol
+server/webadbcontrol.exe
+core/**/target/
+core/**/.gradle/
+core/**/build/
+
+# Runtime state and secrets
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+!.env.example
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.user

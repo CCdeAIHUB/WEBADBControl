@@ -1,0 +1,24 @@
+[Unit]
+Description=ADBControl Web Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=webadb
+Group=webadb
+WorkingDirectory=/opt/webadbcontrol
+EnvironmentFile=-/etc/webadbcontrol/webadbcontrol.env
+ExecStart=/opt/webadbcontrol/webadbcontrol
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/webadbcontrol
+SupplementaryGroups=plugdev
+
+[Install]
+WantedBy=multi-user.target
