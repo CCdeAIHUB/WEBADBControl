@@ -29,8 +29,8 @@ COPY --from=core-build /src/core/target/release/adbcontrol-core ./adbcontrol-cor
 COPY --from=web-build /src/web/dist ./web
 COPY core/assets ./assets
 COPY core/android/companion-app/app/src/main ./companion-source
-RUN mkdir -p data assets/adb/linux-x64 assets/adb/linux-arm64 && \
-    ln -sf /usr/bin/adb assets/adb/linux-x64/adb && \
+RUN mkdir -p data assets/adb/linux-x86_64 assets/adb/linux-arm64 && \
+    ln -sf /usr/bin/adb assets/adb/linux-x86_64/adb && \
     ln -sf /usr/bin/adb assets/adb/linux-arm64/adb && \
     useradd --system --home /opt/webadbcontrol --shell /usr/sbin/nologin webadb && \
     chown -R webadb:webadb /opt/webadbcontrol/data
