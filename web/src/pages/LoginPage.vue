@@ -22,9 +22,9 @@ async function login() {
   loading.value = true
   error.value = ''
   try {
-    const session = await loginWithPassword(password.value)
+    await loginWithPassword(password.value)
     password.value = ''
-    await router.replace(session.mustChangePassword ? '/settings?password=required' : redirectTarget())
+    await router.replace(redirectTarget())
   } catch (value) {
     error.value = toAppError(value).message
   } finally {
@@ -39,7 +39,7 @@ async function login() {
       <div class="grid size-11 place-items-center rounded-xl bg-brand-600 text-white"><Zap :size="21" /></div>
       <div class="eyebrow mt-6">Secure Access</div>
       <h1 class="mt-2 text-2xl font-bold tracking-tight">登录 ADBControl</h1>
-      <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">输入管理密码建立安全会话。首次登录默认密码为 <span class="font-mono font-semibold text-slate-700 dark:text-slate-200">admin</span>，登录后需立即修改。</p>
+      <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">输入管理密码建立安全会话。首次登录默认密码为 <span class="font-mono font-semibold text-slate-700 dark:text-slate-200">admin</span>，登录后可在系统设置中修改。</p>
       <div v-if="serviceUnavailable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">暂时无法读取服务状态，请确认服务正在运行后重试。</div>
       <label class="mt-6 block text-xs font-medium" for="login-password">管理密码</label>
       <div class="relative mt-2"><KeyRound :size="16" class="absolute top-3 left-3 text-slate-400" /><input id="login-password" v-model="password" type="password" class="field pl-9" autocomplete="current-password" placeholder="输入管理密码" autofocus @keyup.enter="login" /></div>

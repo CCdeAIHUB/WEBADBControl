@@ -99,10 +99,6 @@ func (s *Server) authentication(next http.Handler) http.Handler {
 			writeError(writer, http.StatusUnauthorized, errUnauthorized())
 			return
 		}
-		if sessionAuthorized && s.auth.MustChangePassword() && request.URL.Path != "/api/v1/password" && request.URL.Path != "/api/v1/settings" {
-			writeError(writer, http.StatusForbidden, errPasswordChangeRequired())
-			return
-		}
 		next.ServeHTTP(writer, request)
 	})
 }

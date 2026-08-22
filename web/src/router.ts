@@ -26,9 +26,6 @@ router.beforeEach(async (to) => {
       if (to.meta.public === true) return true
       return { name: 'login', query: { redirect: to.fullPath } }
     }
-    if (session.mustChangePassword && to.name !== 'settings') {
-      return { name: 'settings', query: { password: 'required' } }
-    }
     if (to.name === 'login') return safeRedirect(to.query.redirect)
     return true
   } catch {

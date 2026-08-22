@@ -43,14 +43,6 @@ func TestPasswordSessionLifecycle(t *testing.T) {
 		t.Fatalf("unexpected login response: %+v", loginBody.Data)
 	}
 
-	blocked := httptest.NewRecorder()
-	blockedRequest := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
-	blockedRequest.AddCookie(cookie)
-	handler.ServeHTTP(blocked, blockedRequest)
-	if blocked.Code != http.StatusForbidden {
-		t.Fatalf("bootstrap session device status = %d, want 403", blocked.Code)
-	}
-
 	changed := requestJSON(t, handler, http.MethodPut, "/api/v1/password", map[string]string{
 		"currentPassword": auth.DefaultPassword,
 		"newPassword":     "new-password-123",
