@@ -11,7 +11,7 @@ ADBControl Windows 客户端已经围绕 Rust Core、ADB Provider、Android Comp
 3. ADB 设备动作由 Go 映射为参数数组后调用 `adb.exec`，不执行任意主机 Shell。
 4. 浏览器通过同源 HTTP 与 WebSocket 使用设备、任务、AI 和设置能力。
 5. 自动化任务延续版本化 JSON DSL、SQLite 持久化和显式运行状态机。
-6. 非回环地址监听时必须配置不少于 16 字符的访问令牌。
+6. 浏览器使用密码登录和 HttpOnly 随机会话；默认密码仅用于首次启动并强制修改，兼容令牌只服务于脚本/API 客户端。
 
 ## 原因
 

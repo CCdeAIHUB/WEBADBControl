@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getSession } from '@/services/auth'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -9,9 +10,31 @@ export const router = createRouter({
     { path: '/automation', name: 'automation', component: () => import('@/pages/AutomationPage.vue'), meta: { title: '自动化任务' } },
     { path: '/assistant', name: 'assistant', component: () => import('@/pages/AssistantPage.vue'), meta: { title: 'AI 助手' } },
     { path: '/settings', name: 'settings', component: () => import('@/pages/SettingsPage.vue'), meta: { title: '系统设置' } },
-    { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue'), meta: { title: '访问验证', public: true } },
+    { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue'), meta: { title: '密码登录', public: true } },
   ],
   scrollBehavior: () => ({ top: 0 }),
+})
+
+function safeRedirect(value: unknown): string {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/'
+}
+
+router.beforeEach(async (to) => {
+  try {
+    const session = await getSession()
+    if (!session.authenticated) {
+      if (to.meta.public === true) return true
+      return { name: 'login', query: { redirect: to.fullPath } }
+    }
+    if (session.mustChangePassword && to.name !== 'settings') {
+      return { name: 'settings', query: { password: 'required' } }
+    }
+    if (to.name === 'login') return safeRedirect(to.query.redirect)
+    return true
+  } catch {
+    if (to.meta.public === true) return true
+    return { name: 'login', query: { redirect: to.fullPath, service: 'unavailable' } }
+  }
 })
 
 router.afterEach((to) => {

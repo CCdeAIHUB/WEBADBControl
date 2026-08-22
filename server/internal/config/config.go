@@ -30,12 +30,8 @@ func Load() (Config, error) {
 		CompanionAPK: env("WEBADB_COMPANION_APK", "./companion.apk"),
 		BehindProxy:  envBool("WEBADB_BEHIND_PROXY", false),
 	}
-	host, _, err := net.SplitHostPort(config.Address)
-	if err != nil {
+	if _, _, err := net.SplitHostPort(config.Address); err != nil {
 		return Config{}, fmt.Errorf("invalid WEBADB_ADDRESS: %w", err)
-	}
-	if !isLoopback(host) && len(config.AuthToken) < 16 {
-		return Config{}, fmt.Errorf("WEBADB_AUTH_TOKEN must contain at least 16 characters when listening beyond loopback")
 	}
 	for _, path := range []string{config.DataDir, filepath.Join(config.DataDir, "uploads")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -59,8 +55,4 @@ func envBool(key string, fallback bool) bool {
 	}
 	parsed, err := strconv.ParseBool(value)
 	return err == nil && parsed
-}
-
-func isLoopback(host string) bool {
-	return host == "localhost" || host == "" || net.ParseIP(host).IsLoopback()
 }

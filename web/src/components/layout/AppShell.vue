@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
-  Bot, Boxes, ChevronLeft, LayoutDashboard, Menu, Settings, Smartphone,
+  Bot, Boxes, ChevronLeft, LayoutDashboard, LogOut, Menu, Settings, Smartphone,
   Workflow, X, Zap,
 } from 'lucide-vue-next'
+import { logout } from '@/services/auth'
 import { useUiStore } from '@/stores/ui'
 
 const route = useRoute()
+const router = useRouter()
 const ui = useUiStore()
 const isPublic = computed(() => route.meta.public === true)
+
+async function signOut() {
+  try { await logout() } finally { await router.replace('/login') }
+}
+
 const navigation = [
   { to: '/', label: '工作台', icon: LayoutDashboard },
   { to: '/devices', label: '设备中心', icon: Smartphone },
@@ -59,6 +66,9 @@ const navigation = [
         <RouterLink to="/settings" class="flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/5">
           <Settings :size="18" />系统设置
         </RouterLink>
+        <button class="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-500/10 dark:hover:text-red-300" @click="signOut">
+          <LogOut :size="18" />退出登录
+        </button>
       </div>
     </aside>
 

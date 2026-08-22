@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/ai"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/auth"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/automation"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/config"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
@@ -24,17 +25,21 @@ type Server struct {
 	automation *automation.Service
 	settings   *settings.Store
 	ai         *ai.Service
+	auth       *auth.Manager
 	logger     *slog.Logger
 }
 
-func New(config config.Config, devices *device.Service, automation *automation.Service, settings *settings.Store, ai *ai.Service, logger *slog.Logger) *Server {
-	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, logger: logger}
+func New(config config.Config, devices *device.Service, automation *automation.Service, settings *settings.Store, ai *ai.Service, auth *auth.Manager, logger *slog.Logger) *Server {
+	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, auth: auth, logger: logger}
 }
 
 func (s *Server) Handler() http.Handler {
 	router := http.NewServeMux()
 	router.HandleFunc("GET /api/v1/health", s.health)
-	router.HandleFunc("POST /api/v1/session", s.session)
+	router.HandleFunc("GET /api/v1/session", s.sessionStatus)
+	router.HandleFunc("POST /api/v1/session", s.createSession)
+	router.HandleFunc("DELETE /api/v1/session", s.deleteSession)
+	router.HandleFunc("PUT /api/v1/password", s.changePassword)
 	router.HandleFunc("GET /api/v1/overview", s.overview)
 	router.HandleFunc("GET /api/v1/devices", s.listDevices)
 	router.HandleFunc("GET /api/v1/devices/discover", s.discoverDevices)
@@ -78,42 +83,33 @@ func (s *Server) health(writer http.ResponseWriter, _ *http.Request) {
 	writeData(writer, http.StatusOK, map[string]any{"status": "ok", "time": time.Now().UTC()})
 }
 
-func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
-	var body struct {
-		Token string `json:"token"`
-	}
-	if !decodeJSON(writer, request, &body) {
-		return
-	}
-	if !s.validToken(body.Token) {
-		writeError(writer, http.StatusUnauthorized, errUnauthorized())
-		return
-	}
-	http.SetCookie(writer, &http.Cookie{Name: "webadb_session", Value: body.Token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.config.BehindProxy, MaxAge: 86400})
-	writeData(writer, http.StatusOK, map[string]bool{"authenticated": true})
-}
-
 func (s *Server) authentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/v1/health" || request.URL.Path == "/api/v1/session" || !strings.HasPrefix(request.URL.Path, "/api/") || s.config.AuthToken == "" {
+		if request.URL.Path == "/api/v1/health" || request.URL.Path == "/api/v1/session" || !strings.HasPrefix(request.URL.Path, "/api/") {
 			next.ServeHTTP(writer, request)
 			return
 		}
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-		if cookie, err := request.Cookie("webadb_session"); err == nil && token == "" {
-			token = cookie.Value
+		legacyAuthorized := token != "" && s.validLegacyToken(token)
+		sessionAuthorized := false
+		if cookie, err := request.Cookie(sessionCookieName); err == nil {
+			sessionAuthorized = s.auth.ValidateSession(cookie.Value)
 		}
-		if !s.validToken(token) {
+		if !legacyAuthorized && !sessionAuthorized {
 			writeError(writer, http.StatusUnauthorized, errUnauthorized())
+			return
+		}
+		if sessionAuthorized && s.auth.MustChangePassword() && request.URL.Path != "/api/v1/password" && request.URL.Path != "/api/v1/settings" {
+			writeError(writer, http.StatusForbidden, errPasswordChangeRequired())
 			return
 		}
 		next.ServeHTTP(writer, request)
 	})
 }
 
-func (s *Server) validToken(token string) bool {
-	if s.config.AuthToken == "" {
-		return true
+func (s *Server) validLegacyToken(token string) bool {
+	if s.config.AuthToken == "" || token == "" {
+		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AuthToken)) == 1
 }

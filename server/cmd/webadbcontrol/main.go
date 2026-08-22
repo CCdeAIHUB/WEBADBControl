@@ -13,6 +13,7 @@ import (
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/ai"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/api"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/auth"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/automation"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/config"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/coreipc"
@@ -54,7 +55,12 @@ func main() {
 		logger.Error("settings_open_failed", "error", err)
 		os.Exit(1)
 	}
-	handler := api.New(applicationConfig, devices, automationService, settingsStore, ai.NewService(settingsStore), logger).Handler()
+	authenticator, err := auth.Open(filepath.Join(applicationConfig.DataDir, "credentials.json"))
+	if err != nil {
+		logger.Error("credentials_open_failed", "error", err)
+		os.Exit(1)
+	}
+	handler := api.New(applicationConfig, devices, automationService, settingsStore, ai.NewService(settingsStore), authenticator, logger).Handler()
 	httpServer := &http.Server{Addr: applicationConfig.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 
 	go func() {

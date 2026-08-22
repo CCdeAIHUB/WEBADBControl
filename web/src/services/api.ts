@@ -27,11 +27,11 @@ async function parseError(response: Response): Promise<ApiError> {
     const payload = (await response.json()) as { error: AppError }
     if (payload.error?.errorCode) return new ApiError(payload.error)
   } catch {
-    // The network boundary still returns a stable local error when a reverse proxy emits HTML.
+    // Reverse proxies may return HTML; keep a stable local error contract.
   }
   return new ApiError({
     errorCode: response.status === 401 ? 'AUTH_REQUIRED' : 'HTTP_ERROR',
-    message: response.status === 401 ? '需要登录后继续' : `服务请求失败（${response.status}）`,
+    message: response.status === 401 ? '登录状态已失效，请重新登录' : `服务请求失败（${response.status}）`,
     module: 'api.client',
     recoverable: true,
     traceId: response.headers.get('x-request-id') ?? 'client-http',
@@ -47,13 +47,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init.headers,
     },
   })
-  if (!response.ok) throw await parseError(response)
+  if (!response.ok) {
+    const error = await parseError(response)
+    if (response.status === 401 && path !== '/session' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('webadb:auth-required'))
+    }
+    throw error
+  }
   if (response.status === 204) return undefined as T
   return ((await response.json()) as Envelope<T>).data
-}
-
-export async function authenticate(token: string): Promise<void> {
-  await api('/session', { method: 'POST', body: JSON.stringify({ token }) })
 }
 
 export function toAppError(value: unknown): AppError {

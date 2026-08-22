@@ -4,7 +4,7 @@ services:
     image: webadbcontrol:latest
     restart: unless-stopped
     environment:
-      WEBADB_AUTH_TOKEN: ${WEBADB_AUTH_TOKEN:?set WEBADB_AUTH_TOKEN in .env}
+      WEBADB_AUTH_TOKEN: ${WEBADB_AUTH_TOKEN:-}
       WEBADB_BEHIND_PROXY: "false"
     ports:
       - "8080:8080"

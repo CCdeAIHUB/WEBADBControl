@@ -56,7 +56,7 @@ pnpm dev
 
 ```bash
 cp .env.example .env
-# 修改 .env 中的 WEBADB_AUTH_TOKEN
+# 浏览器首次登录默认密码为 admin，登录后会要求立即修改
 docker compose up -d --build
 ```
 
@@ -71,7 +71,7 @@ docker compose up -d --build
 - Arch Linux：`pacman`
 - openSUSE：`zypper`
 
-生产环境建议放在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。非回环地址监听时，服务会强制要求至少 16 字符的 `WEBADB_AUTH_TOKEN`。
+生产环境建议放在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。首次登录默认密码为 `admin`，系统会引导立即修改；`WEBADB_AUTH_TOKEN` 仅作为脚本/API 客户端的可选兼容令牌。
 
 ## 验证
 
@@ -88,7 +88,7 @@ CI 还会执行 Rust fmt、clippy、QUIC feature check 与 Docker 构建。
 - 不接受任意主机 Shell 命令；
 - 高风险设备动作使用服务端白名单与前端二次确认；
 - AI API Key 只保存在服务端数据目录；
-- 远程监听必须启用令牌；
+- 管理密码使用随机盐派生后持久化，首次登录强制修改默认密码；
 - 默认启用同源、CSP、Clickjacking 与 MIME 嗅探防护；
 - 生产数据目录与 `.env` 不进入 Git。
 
