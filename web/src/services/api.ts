@@ -1,4 +1,5 @@
 import type { AppError } from '@/types/api'
+import { markClientAuthenticated } from '@/services/clientAuthState'
 
 type Envelope<T> = { data: T }
 
@@ -50,6 +51,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     const error = await parseError(response)
     if (response.status === 401 && path !== '/session' && typeof window !== 'undefined') {
+      markClientAuthenticated(false)
       window.dispatchEvent(new CustomEvent('webadb:auth-required'))
     }
     throw error

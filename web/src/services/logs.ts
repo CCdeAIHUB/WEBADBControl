@@ -1,4 +1,5 @@
 import { api } from '@/services/api'
+import { isClientAuthenticated } from '@/services/clientAuthState'
 import type { LogEvent, LogStats } from '@/types/api'
 
 export interface LogQuery {
@@ -35,6 +36,7 @@ export function reportClientError(payload: {
   traceId?: string
   details?: Record<string, unknown>
 }) {
+  if (!isClientAuthenticated()) return
   const body = JSON.stringify(payload)
   if (navigator.sendBeacon) {
     const blob = new Blob([body], { type: 'application/json' })
