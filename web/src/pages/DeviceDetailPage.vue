@@ -50,8 +50,9 @@ onMounted(load)
   <StateMessage v-if="loading && !overview" state="loading" title="正在读取设备信息" />
   <StateMessage v-else-if="error" state="error" :error="error" @retry="load" />
   <template v-else-if="overview">
-    <OverviewPanel v-if="activeTab === 'overview'" :overview="overview" />`n    <HardwarePanel v-if="activeTab === 'hardware'" :device-id="deviceId" />
-    <ScreenPanel v-show="activeTab === 'screen'" :device-id="deviceId" :active="activeTab === 'screen'" />
+    <OverviewPanel v-if="activeTab === 'overview'" :overview="overview" />
+    <HardwarePanel v-if="activeTab === 'hardware'" :device-id="deviceId" />
+    <ScreenPanel v-if="activeTab === 'screen'" :device-id="deviceId" active />
     <AppsPanel v-if="activeTab === 'apps'" :device-id="deviceId" />
     <FilesPanel v-if="activeTab === 'files'" :device-id="deviceId" />
     <TerminalPanel v-if="activeTab === 'terminal'" :device-id="deviceId" />

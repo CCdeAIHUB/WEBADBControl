@@ -59,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("POST /api/v1/devices/{id}/packages/action", s.packageAction)
 	router.HandleFunc("POST /api/v1/devices/{id}/packages/install", s.installPackage)
 	router.HandleFunc("GET /api/v1/devices/{id}/files", s.files)
+	router.HandleFunc("DELETE /api/v1/devices/{id}/files", s.deleteFile)
+	router.HandleFunc("POST /api/v1/devices/{id}/files/mkdir", s.createDirectory)
 	router.HandleFunc("POST /api/v1/devices/{id}/files/upload", s.uploadFile)
 	router.HandleFunc("GET /api/v1/devices/{id}/files/download", s.downloadFile)
 	router.HandleFunc("GET /api/v1/devices/{id}/capabilities", s.capabilities)

@@ -251,17 +251,17 @@ func (s *Server) files(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, apperror.Wrap("REMOTE_PATH_INVALID", "设备路径无效", "device.files", true, err))
 		return
 	}
-	output, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "shell", "ls", "-la", path))
+	entries, err := s.devices.ListFiles(request.Context(), request.PathValue("id"), path)
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, err)
 		return
 	}
-	writeData(writer, http.StatusOK, map[string]any{"path": path, "listing": strings.Split(strings.TrimSpace(output.Stdout), "\n")})
+	writeData(writer, http.StatusOK, map[string]any{"path": path, "entries": entries})
 }
 
 func (s *Server) uploadFile(writer http.ResponseWriter, request *http.Request) {
 	remote := request.URL.Query().Get("path")
-	if err := device.ValidateRemotePath(remote); err != nil {
+	if err := device.ValidateUploadDirectory(remote); err != nil {
 		writeError(writer, http.StatusBadRequest, apperror.Wrap("REMOTE_PATH_INVALID", "设备路径无效", "device.files", true, err))
 		return
 	}
@@ -293,6 +293,29 @@ func (s *Server) uploadFile(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeData(writer, http.StatusCreated, map[string]string{"path": remoteFile})
+}
+
+func (s *Server) createDirectory(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	if err := s.devices.MakeDirectory(request.Context(), request.PathValue("id"), body.Path); err != nil {
+		writeError(writer, http.StatusBadRequest, apperror.Wrap("REMOTE_PATH_INVALID", "目录路径无效", "device.files", true, err))
+		return
+	}
+	writeData(writer, http.StatusCreated, map[string]string{"path": body.Path})
+}
+
+func (s *Server) deleteFile(writer http.ResponseWriter, request *http.Request) {
+	remote := request.URL.Query().Get("path")
+	if err := s.devices.RemoveFile(request.Context(), request.PathValue("id"), remote); err != nil {
+		writeError(writer, http.StatusBadRequest, apperror.Wrap("REMOTE_PATH_INVALID", "文件路径无效", "device.files", true, err))
+		return
+	}
+	writeData(writer, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 func (s *Server) downloadFile(writer http.ResponseWriter, request *http.Request) {

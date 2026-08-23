@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Expand, Home, LoaderCircle, MousePointer2, Power, RotateCcw, Square, Volume1, Volume2 } from 'lucide-vue-next'
+import { Expand, Home, LoaderCircle, MousePointer2, Play, Power, RotateCcw, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -8,31 +8,59 @@ const props = defineProps<{ deviceId: string; active: boolean }>()
 const ui = useUiStore()
 const frame = ref('')
 const status = ref<'idle' | 'connecting' | 'live' | 'error'>('idle')
+const frameCount = ref(0)
+const lastFrameAt = ref('')
+const connected = ref(false)
 const container = ref<HTMLElement>()
 let socket: WebSocket | undefined
+let intentionalClose = false
+let connectionSeq = 0
 
-const statusText = computed(() => ({ idle: '未开始', connecting: '正在连接画面', live: '实时画面', error: '画面已断开' })[status.value])
+const statusText = computed(() => ({ idle: '未开始', connecting: '正在连接画面', live: '实时投屏中', error: '画面已断开' })[status.value])
+const canStop = computed(() => connected.value || status.value === 'connecting')
 
 function start() {
-  stop()
+  if (socket?.readyState === WebSocket.CONNECTING || socket?.readyState === WebSocket.OPEN) return
   status.value = 'connecting'
+  connected.value = true
+  intentionalClose = false
+  const seq = connectionSeq + 1
+  connectionSeq = seq
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  socket = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen`)
-  socket.binaryType = 'blob'
-  socket.onmessage = (event) => {
+  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen`)
+  socket = current
+  current.binaryType = 'blob'
+  current.onmessage = (event) => {
+    if (seq !== connectionSeq) return
     if (!(event.data instanceof Blob)) return
     if (frame.value) URL.revokeObjectURL(frame.value)
     frame.value = URL.createObjectURL(event.data)
+    frameCount.value += 1
+    lastFrameAt.value = new Date().toLocaleTimeString()
     status.value = 'live'
   }
-  socket.onerror = () => { status.value = 'error' }
-  socket.onclose = () => { if (props.active) status.value = 'error' }
+  current.onerror = () => {
+    if (seq === connectionSeq) status.value = 'error'
+  }
+  current.onclose = () => {
+    if (socket === current) socket = undefined
+    if (seq === connectionSeq) connected.value = false
+    if (seq === connectionSeq && !intentionalClose && props.active) status.value = 'error'
+  }
 }
 
 function stop() {
+  connectionSeq += 1
+  intentionalClose = true
   socket?.close()
   socket = undefined
+  connected.value = false
   status.value = 'idle'
+}
+
+function reconnect() {
+  stop()
+  start()
 }
 
 async function action(type: string, key?: string) {
@@ -63,14 +91,20 @@ onBeforeUnmount(() => { stop(); if (frame.value) URL.revokeObjectURL(frame.value
 
 <template>
   <div ref="container" class="card overflow-hidden bg-[#090d0b] dark:bg-black">
-    <div class="flex h-12 items-center border-b border-white/8 px-4 text-white">
+    <div class="flex flex-wrap items-center gap-2 border-b border-white/8 px-4 py-2 text-white">
       <span class="mr-2 size-1.5 rounded-full" :class="status === 'live' ? 'bg-brand-500' : status === 'error' ? 'bg-red-500' : 'bg-amber-400 animate-pulse-soft'" />
       <span class="text-xs font-medium">{{ statusText }}</span>
-      <button class="ml-auto grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/8 hover:text-white" aria-label="全屏" @click="fullscreen"><Expand :size="16" /></button>
+      <span class="hidden font-mono text-[10px] text-slate-500 sm:inline">帧 {{ frameCount }} · {{ lastFrameAt || '等待首帧' }}</span>
+      <div class="ml-auto flex items-center gap-1.5">
+        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="canStop" @click="start"><Play :size="14" />开始</button>
+        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" @click="reconnect"><RotateCcw :size="14" />重连</button>
+        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="!canStop" @click="stop"><StopCircle :size="14" />停止</button>
+        <button class="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/8 hover:text-white" aria-label="全屏" @click="fullscreen"><Expand :size="16" /></button>
+      </div>
     </div>
     <div class="relative grid min-h-[460px] place-items-center p-5">
       <img v-if="frame" :src="frame" alt="设备实时屏幕" class="max-h-[680px] max-w-full cursor-crosshair select-none rounded-md object-contain shadow-2xl" draggable="false" @click="tap" />
-      <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p></div>
+      <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p><p class="mt-2 text-xs">进入本页会自动连接，也可以手动重连。</p></div>
     </div>
     <div class="flex flex-wrap items-center justify-center gap-1.5 border-t border-white/8 bg-white/[.025] p-2.5">
       <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="返回" @click="action('key', 'BACK')"><RotateCcw :size="17" /></button>

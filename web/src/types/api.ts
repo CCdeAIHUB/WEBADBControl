@@ -24,6 +24,18 @@ export interface DeviceOverview {
   collectedAt: string
 }
 
+export interface DeviceFileEntry {
+  name: string
+  path: string
+  type: 'file' | 'directory' | 'link'
+  permissions: string
+  owner?: string
+  group?: string
+  size: number
+  modified?: string
+  target?: string
+}
+
 export interface AutomationPermissions {
   allowAdb: boolean
   allowShell: boolean

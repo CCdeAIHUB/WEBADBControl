@@ -43,11 +43,21 @@ func ActionArguments(deviceID string, action ActionRequest) ([]string, error) {
 		}
 		return append(base, "swipe", coordinate(action.X), coordinate(action.Y), coordinate(action.EndX), coordinate(action.EndY), coordinate(duration)), nil
 	case "key":
-		allowed := map[string]bool{"HOME": true, "BACK": true, "APP_SWITCH": true, "POWER": true, "VOLUME_UP": true, "VOLUME_DOWN": true, "ENTER": true, "DEL": true}
-		if !allowed[action.Key] {
+		keyCodes := map[string]string{
+			"HOME":        "KEYCODE_HOME",
+			"BACK":        "KEYCODE_BACK",
+			"APP_SWITCH":  "KEYCODE_APP_SWITCH",
+			"POWER":       "KEYCODE_POWER",
+			"VOLUME_UP":   "KEYCODE_VOLUME_UP",
+			"VOLUME_DOWN": "KEYCODE_VOLUME_DOWN",
+			"ENTER":       "KEYCODE_ENTER",
+			"DEL":         "KEYCODE_DEL",
+		}
+		keyCode, ok := keyCodes[action.Key]
+		if !ok {
 			return nil, fmt.Errorf("unsupported key %q", action.Key)
 		}
-		return append(base, "keyevent", action.Key), nil
+		return append(base, "keyevent", keyCode), nil
 	case "text":
 		if !utf8.ValidString(action.Text) || strings.ContainsRune(action.Text, 0) {
 			return nil, fmt.Errorf("input text is invalid")

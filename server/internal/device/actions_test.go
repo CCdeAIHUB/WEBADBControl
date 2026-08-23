@@ -11,7 +11,19 @@ func TestActionArgumentsAreWhitelistedAndAddressed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"-s", "serial-1", "shell", "input", "keyevent", "HOME"}
+	want := []string{"-s", "serial-1", "shell", "input", "keyevent", "KEYCODE_HOME"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("got %#v want %#v", args, want)
+	}
+}
+
+func TestActionArgumentsMapSemanticKeysToAndroidKeyCodes(t *testing.T) {
+	// 场景：网页发送语义按键，服务端必须映射为 Android input keyevent 稳定识别的 KEYCODE_*。
+	args, err := ActionArguments("serial-1", ActionRequest{Type: "key", Key: "APP_SWITCH"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-s", "serial-1", "shell", "input", "keyevent", "KEYCODE_APP_SWITCH"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("got %#v want %#v", args, want)
 	}
