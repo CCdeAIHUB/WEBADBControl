@@ -123,8 +123,18 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 func (s *Server) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(writer, request)
-		s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "durationMs", time.Since(started).Milliseconds())
+		traceID := requestTraceID()
+		writer.Header().Set("X-Request-ID", traceID)
+		state := &responseStateWriter{ResponseWriter: writer}
+		next.ServeHTTP(state, request)
+		status := state.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		if state.writeErr != nil {
+			s.logger.Warn("http_response_write_failed", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", state.Header().Get("X-Request-ID"), "error", state.writeErr)
+		}
+		s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", state.Header().Get("X-Request-ID"), "durationMs", time.Since(started).Milliseconds())
 	})
 }
 
@@ -146,5 +156,7 @@ func (s *Server) static(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer file.Close()
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.Copy(writer, file)
+	if _, err := io.Copy(writer, file); err != nil {
+		s.logger.Warn("static_response_copy_failed", "traceId", writer.Header().Get("X-Request-ID"), "path", request.URL.Path, "error", err)
+	}
 }

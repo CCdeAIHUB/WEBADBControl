@@ -4,19 +4,20 @@ import (
 	"context"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 )
 
 func (s *Service) Pair(ctx context.Context, endpoint, code string) error {
-	if strings.TrimSpace(endpoint) == "" || strings.ContainsAny(endpoint, "\r\n\x00") {
-		return apperror.New("ADB_ENDPOINT_INVALID", "无线配对地址无效", "device.connection", true)
+	normalizedEndpoint, err := normalizeWirelessEndpoint(endpoint)
+	if err != nil {
+		return err
 	}
-	if matched, _ := regexp.MatchString(`^\d{6}$`, code); !matched {
-		return apperror.New("ADB_PAIR_CODE_INVALID", "无线配对码必须是 6 位数字", "device.connection", true)
+	normalizedCode, err := normalizePairingCode(code)
+	if err != nil {
+		return err
 	}
-	_, err := s.Exec(ctx, []string{"pair", endpoint, code})
+	_, err = s.Exec(ctx, []string{"pair", normalizedEndpoint, normalizedCode})
 	return err
 }
 

@@ -2,6 +2,7 @@ package device
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -117,25 +118,36 @@ type DiscoveredService struct {
 	Endpoint string `json:"endpoint"`
 }
 
-var endpointPattern = regexp.MustCompile(`([A-Za-z0-9._-]+|(?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})`)
-
 func ParseMDNS(output string) []DiscoveredService {
 	services := make([]DiscoveredService, 0)
+	seen := make(map[string]struct{})
 	for _, line := range strings.Split(strings.ReplaceAll(output, "\r", ""), "\n") {
-		match := endpointPattern.FindString(line)
-		if match == "" {
-			continue
-		}
-		serviceType := "connect"
-		if strings.Contains(line, "_adb-tls-pairing") {
-			serviceType = "pairing"
-		}
 		fields := strings.Fields(line)
-		name := match
-		if len(fields) > 0 {
-			name = fields[0]
+		for _, field := range fields {
+			candidate := strings.Trim(field, ",;")
+			if _, _, err := net.SplitHostPort(candidate); err != nil {
+				continue
+			}
+			normalized, err := normalizeWirelessEndpoint(candidate)
+			if err != nil {
+				continue
+			}
+			serviceType := "connect"
+			if strings.Contains(line, "_adb-tls-pairing") {
+				serviceType = "pairing"
+			}
+			key := serviceType + "|" + normalized
+			if _, exists := seen[key]; exists {
+				break
+			}
+			seen[key] = struct{}{}
+			name := normalized
+			if len(fields) > 0 {
+				name = fields[0]
+			}
+			services = append(services, DiscoveredService{Name: name, Type: serviceType, Endpoint: normalized})
+			break
 		}
-		services = append(services, DiscoveredService{Name: name, Type: serviceType, Endpoint: match})
 	}
 	return services
 }

@@ -39,5 +39,7 @@ func (s *Server) aiChat(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("X-Accel-Buffering", "no")
 	writer.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(writer, response.Body)
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		s.logger.Warn("ai_stream_copy_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
+	}
 }

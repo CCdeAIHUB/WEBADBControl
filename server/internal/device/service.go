@@ -42,8 +42,7 @@ func (s *Service) Exec(ctx context.Context, args []string) (CommandOutput, error
 		return CommandOutput{}, err
 	}
 	if output.ExitCode != 0 {
-		return output, apperror.New("ADB_COMMAND_FAILED", "设备命令执行失败", "device.service", true).
-			WithSuggestion(strings.TrimSpace(output.Stderr))
+		return output, adbCommandFailure(args, output)
 	}
 	return output, nil
 }
@@ -85,10 +84,11 @@ func parseDevices(output string) []Device {
 }
 
 func (s *Service) Connect(ctx context.Context, endpoint string) error {
-	if strings.TrimSpace(endpoint) == "" || strings.ContainsAny(endpoint, "\r\n\x00") {
-		return apperror.New("ADB_ENDPOINT_INVALID", "无线设备地址无效", "device.connection", true)
+	normalizedEndpoint, err := normalizeWirelessEndpoint(endpoint)
+	if err != nil {
+		return err
 	}
-	if _, err := s.Exec(ctx, []string{"connect", endpoint}); err != nil {
+	if _, err := s.Exec(ctx, []string{"connect", normalizedEndpoint}); err != nil {
 		return err
 	}
 	devices, err := s.List(ctx)
@@ -96,11 +96,12 @@ func (s *Service) Connect(ctx context.Context, endpoint string) error {
 		return err
 	}
 	for _, candidate := range devices {
-		if candidate.ID == endpoint && candidate.State == "device" {
+		if candidate.ID == normalizedEndpoint && candidate.State == "device" {
 			return nil
 		}
 	}
-	return apperror.New("ADB_CONNECT_NOT_VERIFIED", "ADB 未确认设备在线", "device.connection", true)
+	return apperror.New("ADB_CONNECT_NOT_VERIFIED", "ADB 未确认设备在线", "device.connection", true).
+		WithSuggestion("请确认设备使用的是无线调试页面中的连接端口，而不是六位码配对端口")
 }
 
 func (s *Service) Action(ctx context.Context, deviceID string, request ActionRequest) error {
@@ -131,7 +132,10 @@ func (s *Service) Overview(ctx context.Context, deviceID string) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	battery, _ := s.Exec(ctx, []string{"-s", deviceID, "shell", "dumpsys", "battery"})
+	battery, err := s.Exec(ctx, []string{"-s", deviceID, "shell", "dumpsys", "battery"})
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"deviceId":    deviceID,
 		"properties":  parseProperties(properties.Stdout),

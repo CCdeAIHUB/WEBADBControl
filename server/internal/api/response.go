@@ -19,6 +19,12 @@ func writeError(writer http.ResponseWriter, status int, err error) {
 	if !errors.As(err, &appError) {
 		appError = apperror.Wrap("INTERNAL_ERROR", "服务暂时不可用", "api", true, err)
 	}
+	traceID := writer.Header().Get("X-Request-ID")
+	if traceID == "" {
+		traceID = appError.TraceID
+	}
+	appError.WithTraceID(traceID)
+	writer.Header().Set("X-Request-ID", traceID)
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]any{"error": appError})

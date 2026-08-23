@@ -26,8 +26,16 @@ func (s *Server) overview(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusServiceUnavailable, err)
 		return
 	}
-	tasks, _ := s.automation.List(request.Context())
-	runs, _ := s.automation.Runs(request.Context())
+	tasks, err := s.automation.List(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	runs, err := s.automation.Runs(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
 	writeData(writer, http.StatusOK, map[string]any{"devices": devices, "taskCount": len(tasks), "recentRuns": runs})
 }
 
@@ -48,7 +56,7 @@ func (s *Server) connectDevice(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if err := s.devices.Connect(request.Context(), body.Endpoint); err != nil {
-		writeError(writer, http.StatusBadGateway, err)
+		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
 		return
 	}
 	writeData(writer, http.StatusOK, map[string]string{"endpoint": body.Endpoint, "state": "online"})
@@ -83,7 +91,9 @@ func (s *Server) screenshot(writer http.ResponseWriter, request *http.Request) {
 	}
 	writer.Header().Set("Content-Type", "image/png")
 	writer.Header().Set("Cache-Control", "no-store")
-	_, _ = writer.Write(png)
+	if _, err := writer.Write(png); err != nil {
+		s.logger.Warn("screenshot_response_write_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
+	}
 }
 
 var screenUpgrader = websocket.Upgrader{
@@ -98,6 +108,7 @@ var screenUpgrader = websocket.Upgrader{
 func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request) {
 	connection, err := screenUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
+		s.logger.Warn("screen_websocket_upgrade_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 		return
 	}
 	defer connection.Close()
@@ -108,11 +119,18 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	for {
 		png, err := s.devices.Screenshot(request.Context(), request.PathValue("id"))
 		if err != nil {
-			encoded, _ := json.Marshal(map[string]any{"type": "error", "message": err.Error()})
-			_ = connection.WriteMessage(websocket.TextMessage, encoded)
+			encoded, encodeErr := json.Marshal(map[string]any{"type": "error", "message": err.Error()})
+			if encodeErr != nil {
+				s.logger.Error("screen_error_encode_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", encodeErr)
+				return
+			}
+			if writeErr := connection.WriteMessage(websocket.TextMessage, encoded); writeErr != nil {
+				s.logger.Warn("screen_error_write_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", writeErr)
+			}
 			return
 		}
 		if err := connection.WriteMessage(websocket.BinaryMessage, png); err != nil {
+			s.logger.Info("screen_websocket_closed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 			return
 		}
 		select {
@@ -208,7 +226,11 @@ func (s *Server) installPackage(writer http.ResponseWriter, request *http.Reques
 	}
 	path := temporary.Name()
 	defer os.Remove(path)
-	defer temporary.Close()
+	defer func() {
+		if err := temporary.Close(); err != nil {
+			s.logger.Warn("apk_upload_temp_close_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
+		}
+	}()
 	if _, err := io.Copy(temporary, io.LimitReader(file, 1024*1024*1024)); err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
@@ -256,7 +278,11 @@ func (s *Server) uploadFile(writer http.ResponseWriter, request *http.Request) {
 	}
 	path := temporary.Name()
 	defer os.Remove(path)
-	defer temporary.Close()
+	defer func() {
+		if err := temporary.Close(); err != nil {
+			s.logger.Warn("file_upload_temp_close_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
+		}
+	}()
 	if _, err := io.Copy(temporary, io.LimitReader(file, 2*1024*1024*1024)); err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
@@ -281,7 +307,10 @@ func (s *Server) downloadFile(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	path := temporary.Name()
-	_ = temporary.Close()
+	if err := temporary.Close(); err != nil {
+		writeError(writer, http.StatusInternalServerError, apperror.Wrap("FILE_DOWNLOAD_TEMP_CLOSE_FAILED", "下载临时文件准备失败", "device.files", true, err))
+		return
+	}
 	defer os.Remove(path)
 	if _, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "pull", remote, path)); err != nil {
 		writeError(writer, http.StatusBadGateway, err)

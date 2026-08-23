@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ type ActionExecutor interface {
 type Service struct {
 	repository *Repository
 	executor   ActionExecutor
+	logger     *slog.Logger
 	mu         sync.Mutex
 	controls   map[string]*runControl
 }
@@ -27,10 +29,18 @@ type runControl struct {
 	paused bool
 	resume chan struct{}
 	cancel context.CancelFunc
+	run    *Run
 }
 
 func NewService(repository *Repository, executor ActionExecutor) *Service {
-	return &Service{repository: repository, executor: executor, controls: map[string]*runControl{}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return &Service{repository: repository, executor: executor, logger: logger, controls: map[string]*runControl{}}
+}
+
+func (s *Service) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		s.logger = logger
+	}
 }
 
 func (s *Service) List(ctx context.Context) ([]Task, error) { return s.repository.ListTasks(ctx) }
@@ -42,7 +52,11 @@ func (s *Service) Save(ctx context.Context, task Task) (Task, error) {
 	}
 	now := time.Now().UTC()
 	if task.ID == "" {
-		task.ID = identifier("task")
+		identifier, err := identifier("task")
+		if err != nil {
+			return Task{}, err
+		}
+		task.ID = identifier
 		task.CreatedAt = now
 	}
 	if task.SchemaVersion == 0 {
@@ -68,12 +82,8 @@ func (s *Service) Run(ctx context.Context, taskID string) (Run, error) {
 		return Run{}, apperror.Wrap("AUTOMATION_TASK_NOT_FOUND", "自动化任务不存在", "automation.repository", true, err)
 	}
 	s.mu.Lock()
-	for _, control := range s.controls {
-		_ = control
-	}
 	if task.ConcurrencyPolicy == "skip" {
 		for runID := range s.controls {
-			_ = runID
 			// One active run per task is enforced by the run map key prefix below.
 			if len(runID) > 0 && activeTask(runID) == taskID {
 				s.mu.Unlock()
@@ -81,44 +91,67 @@ func (s *Service) Run(ctx context.Context, taskID string) (Run, error) {
 			}
 		}
 	}
-	run := Run{ID: taskID + ":" + identifier("run"), TaskID: taskID, Status: RunQueued, TotalSteps: len(task.Actions)}
+	runIdentifier, err := identifier("run")
+	if err != nil {
+		s.mu.Unlock()
+		return Run{}, err
+	}
+	run := Run{ID: taskID + ":" + runIdentifier, TaskID: taskID, Status: RunQueued, TotalSteps: len(task.Actions)}
 	runCtx, cancel := context.WithCancel(context.Background())
-	control := &runControl{resume: make(chan struct{}), cancel: cancel}
+	control := &runControl{resume: make(chan struct{}), cancel: cancel, run: &run}
 	s.controls[run.ID] = control
 	s.mu.Unlock()
 	if err := s.repository.SaveRun(ctx, run); err != nil {
-		return Run{}, err
+		cancel()
+		s.mu.Lock()
+		delete(s.controls, run.ID)
+		s.mu.Unlock()
+		return Run{}, apperror.Wrap("AUTOMATION_RUN_SAVE_FAILED", "创建自动化运行记录失败", "automation.repository", true, err)
 	}
-	go s.execute(runCtx, task, run, control)
+	go s.execute(runCtx, task, &run, control)
 	return run, nil
 }
 
-func (s *Service) execute(ctx context.Context, task Task, run Run, control *runControl) {
-	_ = run.Transition(RunRunning)
-	_ = s.repository.SaveRun(context.Background(), run)
+func (s *Service) execute(ctx context.Context, task Task, _ *Run, control *runControl) {
+	if err := s.transitionRun(control, RunRunning); err != nil {
+		s.logRunFailure("automation_run_start_failed", control, err)
+		return
+	}
 	defer func() {
 		s.mu.Lock()
-		delete(s.controls, run.ID)
+		delete(s.controls, control.run.ID)
 		s.mu.Unlock()
 	}()
 	for index, action := range task.Actions {
 		if err := control.wait(ctx); err != nil {
-			_ = run.Transition(RunStopped)
-			_ = s.repository.SaveRun(context.Background(), run)
+			if transitionErr := s.transitionRun(control, RunStopped); transitionErr != nil {
+				s.logRunFailure("automation_run_stop_failed", control, transitionErr)
+			}
 			return
 		}
 		if err := s.executor.ExecuteAutomationAction(ctx, task, action); err != nil {
-			_ = run.Transition(RunFailed)
-			run.ErrorCode = "AUTOMATION_ACTION_FAILED"
-			_ = s.repository.SaveRun(context.Background(), run)
+			if ctx.Err() != nil {
+				if transitionErr := s.transitionRun(control, RunStopped); transitionErr != nil {
+					s.logRunFailure("automation_run_stop_failed", control, transitionErr)
+				}
+				return
+			}
+			control.mu.Lock()
+			control.run.ErrorCode = "AUTOMATION_ACTION_FAILED"
+			control.mu.Unlock()
+			if transitionErr := s.transitionRun(control, RunFailed); transitionErr != nil {
+				s.logRunFailure("automation_run_failure_save_failed", control, transitionErr)
+			}
 			return
 		}
-		run.CompletedSteps = index + 1
-		run.Progress = float64(run.CompletedSteps) / float64(run.TotalSteps)
-		_ = s.repository.SaveRun(context.Background(), run)
+		if err := s.updateRunProgress(control, index+1); err != nil {
+			s.logRunFailure("automation_run_progress_save_failed", control, err)
+			return
+		}
 	}
-	_ = run.Transition(RunSucceeded)
-	_ = s.repository.SaveRun(context.Background(), run)
+	if err := s.transitionRun(control, RunSucceeded); err != nil {
+		s.logRunFailure("automation_run_finish_failed", control, err)
+	}
 }
 
 func (c *runControl) wait(ctx context.Context) error {
@@ -144,29 +177,51 @@ func (s *Service) Control(runID, operation string) error {
 	if !ok {
 		return apperror.New("AUTOMATION_RUN_NOT_ACTIVE", "运行实例当前不可控制", "automation.runtime", true)
 	}
-	control.mu.Lock()
-	defer control.mu.Unlock()
 	switch operation {
 	case "pause":
-		control.paused = true
-	case "resume":
+		control.mu.Lock()
 		if control.paused {
+			control.mu.Unlock()
+			return nil
+		}
+		control.paused = true
+		control.mu.Unlock()
+		if err := s.transitionRun(control, RunPaused); err != nil {
+			control.mu.Lock()
 			control.paused = false
-			close(control.resume)
-			control.resume = make(chan struct{})
+			control.mu.Unlock()
+			return err
+		}
+	case "resume":
+		control.mu.Lock()
+		if !control.paused {
+			control.mu.Unlock()
+			return nil
+		}
+		control.paused = false
+		close(control.resume)
+		control.resume = make(chan struct{})
+		control.mu.Unlock()
+		if err := s.transitionRun(control, RunRunning); err != nil {
+			return err
 		}
 	case "stop":
+		if err := s.transitionRun(control, RunStopped); err != nil {
+			return err
+		}
 		control.cancel()
 	default:
-		return fmt.Errorf("unsupported control operation %q", operation)
+		return apperror.New("AUTOMATION_CONTROL_INVALID", "不支持的运行控制操作", "automation.runtime", true)
 	}
 	return nil
 }
 
-func identifier(prefix string) string {
+func identifier(prefix string) (string, error) {
 	buffer := make([]byte, 8)
-	_, _ = rand.Read(buffer)
-	return prefix + "-" + hex.EncodeToString(buffer)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", apperror.Wrap("AUTOMATION_ID_FAILED", "无法生成自动化标识", "automation.runtime", false, err)
+	}
+	return prefix + "-" + hex.EncodeToString(buffer), nil
 }
 
 func activeTask(runID string) string {

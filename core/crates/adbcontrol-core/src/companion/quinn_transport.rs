@@ -63,7 +63,9 @@ where
             let listener = Arc::clone(&self.listener);
             let max_stream_bytes = self.max_stream_bytes;
             tokio::spawn(async move {
-                let _ = handle_connection(incoming, listener, max_stream_bytes).await;
+                if let Err(error) = handle_connection(incoming, listener, max_stream_bytes).await {
+                    eprintln!("companion QUIC connection failed: {error}");
+                }
             });
         }
         Ok(())
@@ -111,7 +113,7 @@ where
                     ).with_cause(error)
                 })?;
                 let mut guard = listener.lock().await;
-                let _ = guard.accept_media_bytes(&datagram)?;
+                guard.accept_media_bytes(&datagram)?;
             }
         }
     }

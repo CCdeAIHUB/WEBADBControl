@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -21,6 +22,8 @@ type ProcessTransport struct {
 
 func StartProcess(ctx context.Context, binary string) (*ProcessTransport, error) {
 	command := exec.CommandContext(ctx, binary)
+	// Core stderr is diagnostic-only; forwarding it keeps IPC stdout strictly JSON Lines while making crashes observable.
+	command.Stderr = os.Stderr
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, err

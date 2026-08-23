@@ -20,7 +20,7 @@ Go 网络层不会绕过 Core 创建第二套设备协议。ADB 命令仍以 `ar
 
 ## 功能
 
-- USB / 无线 ADB 设备发现、连接与在线验证；
+- USB / 无线 ADB 设备发现、六位码配对、连接与在线验证；
 - 实时屏幕、点击控制、导航键、音量与电源操作；
 - 设备信息、电池、系统与硬件属性；
 - 应用安装、启动、停止、清除数据和卸载；
@@ -56,7 +56,7 @@ pnpm dev
 
 ```bash
 cp .env.example .env
-# 浏览器首次登录默认密码为 admin，登录后会要求立即修改
+# 浏览器首次登录默认密码为 admin；登录后请尽快在“设置”中修改
 docker compose up -d --build
 ```
 
@@ -71,7 +71,11 @@ docker compose up -d --build
 - Arch Linux：`pacman`
 - openSUSE：`zypper`
 
-生产环境建议放在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。首次登录默认密码为 `admin`，系统会引导立即修改；`WEBADB_AUTH_TOKEN` 仅作为脚本/API 客户端的可选兼容令牌。
+生产环境建议放在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。首次登录默认密码为 `admin`，系统会持续提示修改但不会阻断设备管理；`WEBADB_AUTH_TOKEN` 仅作为脚本/API 客户端的可选兼容令牌。
+
+无线配对依赖同时支持 `adb pair` 与 `adb mdns` 的现代 Android Platform-Tools。Docker 构建会下载并验证官方 Linux x86_64 工具；`deploy/install.sh` 也会在启用服务前验证本机架构对应的 ADB，避免旧发行版软件包造成“unknown command mdns/pair”。
+
+路由器、NAS 等 Docker 存储分区较小的设备可以先在外部缓存目录编译前端、Core 与 Go 服务，再使用 `deploy/Dockerfile.runtime` 构建只包含运行产物的镜像。
 
 ## 验证
 
@@ -88,7 +92,7 @@ CI 还会执行 Rust fmt、clippy、QUIC feature check 与 Docker 构建。
 - 不接受任意主机 Shell 命令；
 - 高风险设备动作使用服务端白名单与前端二次确认；
 - AI API Key 只保存在服务端数据目录；
-- 管理密码使用随机盐派生后持久化，首次登录强制修改默认密码；
+- 管理密码使用随机盐派生后持久化，默认密码登录后持续提示修改但不阻断管理流程；
 - 默认启用同源、CSP、Clickjacking 与 MIME 嗅探防护；
 - 生产数据目录与 `.env` 不进入 Git。
 

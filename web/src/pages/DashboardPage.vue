@@ -3,11 +3,13 @@ import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, Bot, CheckCircle2, CircleDot, Clock3, Smartphone, Workflow, Zap } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
 import StateMessage from '@/components/feedback/StateMessage.vue'
-import { api } from '@/services/api'
+import { api, toAppError } from '@/services/api'
 import { useDevicesStore } from '@/stores/devices'
+import { useUiStore } from '@/stores/ui'
 import type { AutomationRun } from '@/types/api'
 
 const devices = useDevicesStore()
+const ui = useUiStore()
 const runs = ref<AutomationRun[]>([])
 const taskCount = ref(0)
 const now = new Date()
@@ -19,7 +21,7 @@ onMounted(async () => {
     const overview = await api<{ taskCount: number; recentRuns: AutomationRun[] }>('/overview')
     taskCount.value = overview.taskCount
     runs.value = overview.recentRuns
-  } catch { /* Device store already presents the primary service error. */ }
+  } catch (error) { ui.failure(toAppError(error)) }
 })
 
 function runTone(status: AutomationRun['status']) {

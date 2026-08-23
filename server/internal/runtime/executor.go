@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/automation"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
 )
@@ -20,9 +21,12 @@ func (e *Executor) ExecuteAutomationAction(ctx context.Context, task automation.
 	case "log":
 		return nil
 	case "delay":
-		milliseconds, _ := number(action.Parameters["milliseconds"])
+		milliseconds, ok := number(action.Parameters["milliseconds"])
+		if !ok {
+			return apperror.New("AUTOMATION_DELAY_INVALID", "延时参数必须是毫秒整数", "automation.executor", true)
+		}
 		if milliseconds < 0 || milliseconds > 86_400_000 {
-			return fmt.Errorf("delay is outside allowed range")
+			return apperror.New("AUTOMATION_DELAY_INVALID", "延时范围必须在 0 到 86400000 毫秒之间", "automation.executor", true)
 		}
 		timer := time.NewTimer(time.Duration(milliseconds) * time.Millisecond)
 		defer timer.Stop()
@@ -33,7 +37,10 @@ func (e *Executor) ExecuteAutomationAction(ctx context.Context, task automation.
 			return nil
 		}
 	case "device.action":
-		encoded, _ := json.Marshal(action.Parameters)
+		encoded, err := json.Marshal(action.Parameters)
+		if err != nil {
+			return apperror.Wrap("AUTOMATION_ACTION_INVALID", "设备动作参数无法编码", "automation.executor", false, err)
+		}
 		var request device.ActionRequest
 		if err := json.Unmarshal(encoded, &request); err != nil {
 			return err
@@ -42,14 +49,14 @@ func (e *Executor) ExecuteAutomationAction(ctx context.Context, task automation.
 	case "adb.command":
 		args, err := stringSlice(action.Parameters["args"])
 		if err != nil {
-			return err
+			return apperror.Wrap("AUTOMATION_ADB_ARGS_INVALID", "ADB 参数数组无效", "automation.executor", true, err)
 		}
 		_, err = e.devices.Exec(ctx, device.DeviceArgs(task.DeviceID, args...))
 		return err
 	case "adb.shell":
 		command, ok := action.Parameters["command"].(string)
 		if !ok || command == "" {
-			return fmt.Errorf("adb.shell command is required")
+			return apperror.New("AUTOMATION_SHELL_COMMAND_INVALID", "ADB Shell 命令不能为空", "automation.executor", true)
 		}
 		_, err := e.devices.Exec(ctx, device.DeviceArgs(task.DeviceID, "shell", command))
 		return err
@@ -61,7 +68,7 @@ func (e *Executor) ExecuteAutomationAction(ctx context.Context, task automation.
 			"args":         action.Parameters["args"],
 		}, nil)
 	default:
-		return fmt.Errorf("action %s requires a configured extension executor", action.Type)
+		return apperror.New("AUTOMATION_ACTION_UNSUPPORTED", "自动化动作尚未配置执行器", "automation.executor", false).WithSuggestion("不支持的动作：" + action.Type)
 	}
 }
 

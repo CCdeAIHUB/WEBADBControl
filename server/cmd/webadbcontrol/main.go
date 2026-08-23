@@ -50,6 +50,7 @@ func main() {
 		os.Exit(1)
 	}
 	automationService := automation.NewService(repository, adbRuntime.NewExecutor(devices))
+	automationService.SetLogger(logger)
 	settingsStore, err := settings.Open(filepath.Join(applicationConfig.DataDir, "settings.json"))
 	if err != nil {
 		logger.Error("settings_open_failed", "error", err)
@@ -79,5 +80,7 @@ func main() {
 	}
 	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
-	_ = httpServer.Shutdown(shutdownContext)
+	if err := httpServer.Shutdown(shutdownContext); err != nil {
+		logger.Error("server_shutdown_failed", "error", err)
+	}
 }

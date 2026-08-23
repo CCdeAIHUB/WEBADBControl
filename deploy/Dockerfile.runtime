@@ -1,0 +1,26 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates usbutils && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/webadbcontrol
+COPY server/webadbcontrol ./webadbcontrol
+COPY core/adbcontrol-core ./adbcontrol-core
+COPY web/dist ./web
+COPY core/assets ./assets
+COPY core/android/companion-app/app/src/main ./companion-source
+COPY runtime-assets/adb/linux-x86_64/adb ./assets/adb/linux-x86_64/adb
+
+RUN chmod +x ./webadbcontrol ./adbcontrol-core ./assets/adb/linux-x86_64/adb && \
+    mkdir -p data && \
+    useradd --system --home /opt/webadbcontrol --shell /usr/sbin/nologin webadb && \
+    chown -R webadb:webadb /opt/webadbcontrol/data
+
+ENV WEBADB_ADDRESS=0.0.0.0:8080 \
+    WEBADB_CORE_BINARY=/opt/webadbcontrol/adbcontrol-core \
+    WEBADB_DATA_DIR=/opt/webadbcontrol/data \
+    WEBADB_WEB_DIR=/opt/webadbcontrol/web \
+    HOME=/opt/webadbcontrol/data
+
+EXPOSE 8080
+USER webadb
+ENTRYPOINT ["/opt/webadbcontrol/webadbcontrol"]

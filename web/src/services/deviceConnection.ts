@@ -1,0 +1,27 @@
+import { api } from '@/services/api'
+
+export interface DiscoveredWirelessService {
+  name: string
+  type: 'pairing' | 'connect'
+  endpoint: string
+}
+
+export interface PairingResult {
+  paired: boolean
+  endpoint: string
+}
+
+export function normalizePairingCode(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 6)
+}
+
+export function discoverWirelessDevices(): Promise<DiscoveredWirelessService[]> {
+  return api('/devices/discover')
+}
+
+export function pairWirelessDevice(endpoint: string, code: string): Promise<PairingResult> {
+  return api('/devices/pair', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint: endpoint.trim(), code: code.trim() }),
+  })
+}

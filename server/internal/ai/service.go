@@ -34,7 +34,10 @@ func (s *Service) Stream(ctx context.Context, request Request) (*http.Response, 
 	if !ok {
 		return nil, apperror.New("AI_MODEL_NOT_FOUND", "未找到可用的 AI 模型配置", "ai.service", true)
 	}
-	encodedMessages, _ := json.Marshal(request.Messages)
+	encodedMessages, err := json.Marshal(request.Messages)
+	if err != nil {
+		return nil, apperror.Wrap("AI_REQUEST_INVALID", "AI 对话内容无法编码", "ai.request", true, err)
+	}
 	if !model.Vision && bytes.Contains(encodedMessages, []byte(`"image_url"`)) {
 		return nil, apperror.New("AI_VISION_UNSUPPORTED", "当前模型不支持屏幕图像", "ai.compatibility", true).
 			WithSuggestion("请选择支持视觉输入的模型")
@@ -49,7 +52,7 @@ func (s *Service) Stream(ctx context.Context, request Request) (*http.Response, 
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, apperror.Wrap("AI_REQUEST_INVALID", "AI 请求无法编码", "ai.request", true, err)
 	}
 	endpoint := strings.TrimRight(model.BaseURL, "/") + "/chat/completions"
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -64,7 +67,10 @@ func (s *Service) Stream(ctx context.Context, request Request) (*http.Response, 
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 8*1024))
+		detail, readErr := io.ReadAll(io.LimitReader(response.Body, 8*1024))
+		if readErr != nil {
+			return nil, apperror.Wrap("AI_PROVIDER_RESPONSE_INVALID", "无法读取 AI 服务错误响应", "ai.provider", true, readErr)
+		}
 		return nil, apperror.New("AI_PROVIDER_ERROR", "AI 服务返回错误", "ai.provider", response.StatusCode >= 500).
 			WithSuggestion(strings.TrimSpace(string(detail)))
 	}
