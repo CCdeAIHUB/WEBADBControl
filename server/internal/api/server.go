@@ -146,7 +146,9 @@ func (s *Server) logging(next http.Handler) http.Handler {
 		duration := time.Since(started).Milliseconds()
 		traceID = state.Header().Get("X-Request-ID")
 		errorCode := state.Header().Get("X-App-Error-Code")
-		s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", traceID, "errorCode", errorCode, "durationMs", duration)
+		if !isUnauthenticatedClientLog(request.URL.Path, status) {
+			s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", traceID, "errorCode", errorCode, "durationMs", duration)
+		}
 		s.recordRequestLog(request, status, duration, traceID, errorCode)
 	})
 }
@@ -178,6 +180,9 @@ var devicePathPattern = regexp.MustCompile(`/api/v1/devices/([^/]+)`)
 
 func (s *Server) recordRequestLog(request *http.Request, status int, duration int64, traceID, errorCode string) {
 	if s.logs == nil || !strings.HasPrefix(request.URL.Path, "/api/") || request.URL.Path == "/api/v1/health" {
+		return
+	}
+	if isUnauthenticatedClientLog(request.URL.Path, status) {
 		return
 	}
 	level := observability.LevelInfo
@@ -222,6 +227,10 @@ func (s *Server) recordRequestLog(request *http.Request, status int, duration in
 			s.logger.Warn("observability_audit_log_failed", "traceId", traceID, "error", err)
 		}
 	}
+}
+
+func isUnauthenticatedClientLog(path string, status int) bool {
+	return path == "/api/v1/logs/client-error" && status == http.StatusUnauthorized
 }
 
 func moduleForPath(path string) string {
