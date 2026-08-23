@@ -29,6 +29,7 @@ Go 网络层不会绕过 Core 创建第二套设备协议。ADB 命令仍以 `ar
 - Android Companion 安装、能力、权限和通用调用；
 - SQLite 自动化任务、JSON DSL、运行状态与控制；
 - OpenAI 兼容多模型、视觉附件与流式 AI 对话；
+- 系统日志、关键操作审计、前端错误上报与 traceId 检索；
 - 深色/浅色主题、响应式布局、结构化错误与访问鉴权。
 
 完整映射见 [功能对照表](docs/feature-parity.md)。
@@ -93,6 +94,7 @@ CI 还会执行 Rust fmt、clippy、QUIC feature check 与 Docker 构建。
 - 高风险设备动作使用服务端白名单与前端二次确认；
 - AI API Key 只保存在服务端数据目录；
 - 管理密码使用随机盐派生后持久化，默认密码登录后持续提示修改但不阻断管理流程；
+- 系统日志仅保存请求摘要、审计字段和脱敏错误详情，不记录密码、令牌、API Key 或上传文件内容；
 - 默认启用同源、CSP、Clickjacking 与 MIME 嗅探防护；
 - 生产数据目录与 `.env` 不进入 Git。
 

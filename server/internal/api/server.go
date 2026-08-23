@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/automation"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/config"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/observability"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/settings"
 )
 
@@ -26,11 +28,12 @@ type Server struct {
 	settings   *settings.Store
 	ai         *ai.Service
 	auth       *auth.Manager
+	logs       *observability.Service
 	logger     *slog.Logger
 }
 
-func New(config config.Config, devices *device.Service, automation *automation.Service, settings *settings.Store, ai *ai.Service, auth *auth.Manager, logger *slog.Logger) *Server {
-	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, auth: auth, logger: logger}
+func New(config config.Config, devices *device.Service, automation *automation.Service, settings *settings.Store, ai *ai.Service, auth *auth.Manager, logs *observability.Service, logger *slog.Logger) *Server {
+	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, auth: auth, logs: logs, logger: logger}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -77,6 +80,9 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("GET /api/v1/settings", s.getSettings)
 	router.HandleFunc("PUT /api/v1/settings", s.saveSettings)
 	router.HandleFunc("POST /api/v1/ai/chat", s.aiChat)
+	router.HandleFunc("GET /api/v1/logs", s.listLogs)
+	router.HandleFunc("GET /api/v1/logs/stats", s.logStats)
+	router.HandleFunc("POST /api/v1/logs/client-error", s.clientError)
 	router.HandleFunc("/", s.static)
 	return s.logging(s.securityHeaders(s.authentication(router)))
 }
@@ -136,7 +142,11 @@ func (s *Server) logging(next http.Handler) http.Handler {
 		if state.writeErr != nil {
 			s.logger.Warn("http_response_write_failed", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", state.Header().Get("X-Request-ID"), "error", state.writeErr)
 		}
-		s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", state.Header().Get("X-Request-ID"), "durationMs", time.Since(started).Milliseconds())
+		duration := time.Since(started).Milliseconds()
+		traceID = state.Header().Get("X-Request-ID")
+		errorCode := state.Header().Get("X-App-Error-Code")
+		s.logger.Info("http_request", "method", request.Method, "path", request.URL.Path, "status", status, "traceId", traceID, "errorCode", errorCode, "durationMs", duration)
+		s.recordRequestLog(request, status, duration, traceID, errorCode)
 	})
 }
 
@@ -161,4 +171,163 @@ func (s *Server) static(writer http.ResponseWriter, request *http.Request) {
 	if _, err := io.Copy(writer, file); err != nil {
 		s.logger.Warn("static_response_copy_failed", "traceId", writer.Header().Get("X-Request-ID"), "path", request.URL.Path, "error", err)
 	}
+}
+
+var devicePathPattern = regexp.MustCompile(`/api/v1/devices/([^/]+)`)
+
+func (s *Server) recordRequestLog(request *http.Request, status int, duration int64, traceID, errorCode string) {
+	if s.logs == nil || !strings.HasPrefix(request.URL.Path, "/api/") || request.URL.Path == "/api/v1/health" {
+		return
+	}
+	level := observability.LevelInfo
+	if status >= 500 {
+		level = observability.LevelError
+	} else if status >= 400 {
+		level = observability.LevelWarn
+	}
+	action := request.Method + " " + request.URL.Path
+	deviceID := ""
+	if matches := devicePathPattern.FindStringSubmatch(request.URL.Path); len(matches) == 2 {
+		deviceID = matches[1]
+	}
+	event := observability.Event{
+		Type:       observability.TypeRequest,
+		Level:      level,
+		Module:     moduleForPath(request.URL.Path),
+		Action:     action,
+		Message:    "HTTP " + action,
+		TraceID:    traceID,
+		ErrorCode:  errorCode,
+		DeviceID:   deviceID,
+		Method:     request.Method,
+		Path:       request.URL.Path,
+		Status:     status,
+		DurationMS: duration,
+		Actor:      actorForRequest(request),
+		IPAddress:  clientIP(request),
+		UserAgent:  request.UserAgent(),
+		Details: map[string]any{
+			"query": sanitizedQueryKeys(request.URL.Query()),
+		},
+	}
+	if err := s.logs.Record(request.Context(), event); err != nil {
+		s.logger.Warn("observability_request_log_failed", "traceId", traceID, "error", err)
+	}
+	if shouldAudit(request) {
+		event.Type = observability.TypeAudit
+		event.Action = auditAction(request)
+		event.Message = auditMessage(request, status)
+		if err := s.logs.Record(request.Context(), event); err != nil {
+			s.logger.Warn("observability_audit_log_failed", "traceId", traceID, "error", err)
+		}
+	}
+}
+
+func moduleForPath(path string) string {
+	switch {
+	case strings.Contains(path, "/session") || strings.Contains(path, "/password"):
+		return "api.auth"
+	case strings.Contains(path, "/devices"):
+		return "device"
+	case strings.Contains(path, "/automation"):
+		return "automation"
+	case strings.Contains(path, "/settings"):
+		return "settings"
+	case strings.Contains(path, "/ai/"):
+		return "ai"
+	case strings.Contains(path, "/logs"):
+		return "observability"
+	default:
+		return "api"
+	}
+}
+
+func shouldAudit(request *http.Request) bool {
+	if request.Method == http.MethodGet {
+		return false
+	}
+	path := request.URL.Path
+	if path == "/api/v1/logs/client-error" {
+		return false
+	}
+	return strings.Contains(path, "/session") ||
+		strings.Contains(path, "/password") ||
+		strings.Contains(path, "/devices") ||
+		strings.Contains(path, "/automation") ||
+		strings.Contains(path, "/settings") ||
+		strings.Contains(path, "/ai/")
+}
+
+func auditAction(request *http.Request) string {
+	path := request.URL.Path
+	switch {
+	case path == "/api/v1/session" && request.Method == http.MethodPost:
+		return "auth.login"
+	case path == "/api/v1/session" && request.Method == http.MethodDelete:
+		return "auth.logout"
+	case path == "/api/v1/password":
+		return "auth.change_password"
+	case strings.Contains(path, "/devices/pair"):
+		return "device.pair"
+	case strings.Contains(path, "/devices/connect"):
+		return "device.connect"
+	case strings.Contains(path, "/actions"):
+		return "device.action"
+	case strings.Contains(path, "/terminal"):
+		return "device.terminal"
+	case strings.Contains(path, "/files"):
+		return "device.files"
+	case strings.Contains(path, "/packages"):
+		return "device.packages"
+	case strings.Contains(path, "/automation"):
+		return "automation.change"
+	case strings.Contains(path, "/settings"):
+		return "settings.save"
+	case strings.Contains(path, "/ai/"):
+		return "ai.chat"
+	default:
+		return request.Method + " " + path
+	}
+}
+
+func auditMessage(request *http.Request, status int) string {
+	result := "成功"
+	if status >= 400 {
+		result = "失败"
+	}
+	return auditAction(request) + " " + result
+}
+
+func actorForRequest(request *http.Request) string {
+	if _, err := request.Cookie(sessionCookieName); err == nil {
+		return "session"
+	}
+	if strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ") != "" {
+		return "legacy-token"
+	}
+	return "anonymous"
+}
+
+func clientIP(request *http.Request) string {
+	if forwarded := strings.TrimSpace(request.Header.Get("X-Forwarded-For")); forwarded != "" {
+		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+	host := request.RemoteAddr
+	if index := strings.LastIndex(host, ":"); index > 0 {
+		return host[:index]
+	}
+	return host
+}
+
+func sanitizedQueryKeys(values map[string][]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "key") || strings.Contains(lower, "secret") {
+			keys = append(keys, key+"=[redacted]")
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys
 }

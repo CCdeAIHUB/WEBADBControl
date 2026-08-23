@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bot, Boxes, ChevronLeft, LayoutDashboard, LogOut, Menu, Settings, Smartphone,
+  Bot, Boxes, ChevronLeft, ClipboardList, LayoutDashboard, LogOut, Menu, Settings, Smartphone,
   Workflow, X, Zap,
 } from 'lucide-vue-next'
 import { logout } from '@/services/auth'
@@ -22,6 +22,7 @@ const navigation = [
   { to: '/devices', label: '设备中心', icon: Smartphone },
   { to: '/automation', label: '自动化任务', icon: Workflow },
   { to: '/assistant', label: 'AI 助手', icon: Bot },
+  { to: '/logs', label: '系统日志', icon: ClipboardList },
 ]
 </script>
 

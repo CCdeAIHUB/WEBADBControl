@@ -25,6 +25,7 @@ func writeError(writer http.ResponseWriter, status int, err error) {
 	}
 	appError.WithTraceID(traceID)
 	writer.Header().Set("X-Request-ID", traceID)
+	writer.Header().Set("X-App-Error-Code", appError.ErrorCode)
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]any{"error": appError})

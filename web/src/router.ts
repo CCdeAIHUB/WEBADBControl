@@ -9,6 +9,7 @@ export const router = createRouter({
     { path: '/devices/:id', name: 'device', component: () => import('@/pages/DeviceDetailPage.vue'), meta: { title: '设备详情' } },
     { path: '/automation', name: 'automation', component: () => import('@/pages/AutomationPage.vue'), meta: { title: '自动化任务' } },
     { path: '/assistant', name: 'assistant', component: () => import('@/pages/AssistantPage.vue'), meta: { title: 'AI 助手' } },
+    { path: '/logs', name: 'logs', component: () => import('@/pages/LogsPage.vue'), meta: { title: '系统日志' } },
     { path: '/settings', name: 'settings', component: () => import('@/pages/SettingsPage.vue'), meta: { title: '系统设置' } },
     { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue'), meta: { title: '密码登录', public: true } },
   ],

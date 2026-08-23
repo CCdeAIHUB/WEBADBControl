@@ -87,3 +87,33 @@ export interface AppSettings {
   aiModels: AIModel[]
   defaultModelId?: string
 }
+
+export interface LogEvent {
+  id: string
+  type: 'request' | 'audit' | 'client_error' | 'system' | string
+  level: 'info' | 'warn' | 'error' | string
+  module: string
+  action: string
+  message: string
+  traceId: string
+  errorCode?: string
+  deviceId?: string
+  method?: string
+  path?: string
+  status?: number
+  durationMs?: number
+  actor?: string
+  ipAddress?: string
+  userAgent?: string
+  details?: Record<string, unknown>
+  createdAt: string
+}
+
+export interface LogStats {
+  total: number
+  errorCount: number
+  warnCount: number
+  byType: Record<string, number>
+  byLevel: Record<string, number>
+  lastErrorAt?: string
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/config"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/coreipc"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/observability"
 	adbRuntime "github.com/CCdeAIHUB/WEBADBControl/server/internal/runtime"
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/settings"
 )
@@ -51,6 +52,23 @@ func main() {
 	}
 	automationService := automation.NewService(repository, adbRuntime.NewExecutor(devices))
 	automationService.SetLogger(logger)
+	logRepository, err := observability.OpenRepository(filepath.Join(applicationConfig.DataDir, "observability.sqlite"))
+	if err != nil {
+		logger.Error("observability_repository_failed", "error", err)
+		os.Exit(1)
+	}
+	defer logRepository.Close()
+	logService := observability.NewService(logRepository)
+	if err := logService.Record(context.Background(), observability.Event{
+		Type:    observability.TypeSystem,
+		Level:   observability.LevelInfo,
+		Module:  "server",
+		Action:  "server.boot",
+		Message: "服务进程启动",
+		TraceID: "server-startup",
+	}); err != nil {
+		logger.Warn("observability_startup_log_failed", "error", err)
+	}
 	settingsStore, err := settings.Open(filepath.Join(applicationConfig.DataDir, "settings.json"))
 	if err != nil {
 		logger.Error("settings_open_failed", "error", err)
@@ -61,7 +79,7 @@ func main() {
 		logger.Error("credentials_open_failed", "error", err)
 		os.Exit(1)
 	}
-	handler := api.New(applicationConfig, devices, automationService, settingsStore, ai.NewService(settingsStore), authenticator, logger).Handler()
+	handler := api.New(applicationConfig, devices, automationService, settingsStore, ai.NewService(settingsStore), authenticator, logService, logger).Handler()
 	httpServer := &http.Server{Addr: applicationConfig.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 
 	go func() {
