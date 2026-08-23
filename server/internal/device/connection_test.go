@@ -72,6 +72,34 @@ func TestDiscoverReportsUnsupportedADBInsteadOfGenericFailure(t *testing.T) {
 	}
 }
 
+func TestKeepAliveReconnectsWirelessDeviceAndVerifiesShell(t *testing.T) {
+	// 场景：无线 ADB 保活必须先 adb connect，再执行轻量命令验证连接仍可用。
+	caller := &connectionCaller{}
+	err := NewService(caller).KeepAlive(context.Background(), "192.168.3.20:5555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"connect", "192.168.3.20:5555"},
+		{"-s", "192.168.3.20:5555", "shell", "true"},
+	}
+	if !reflect.DeepEqual(caller.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", caller.calls, want)
+	}
+}
+
+func TestKeepAliveRejectsUSBDevice(t *testing.T) {
+	// 场景：USB 设备不需要无线保活，不能伪造 adb connect 参数。
+	caller := &connectionCaller{}
+	err := NewService(caller).KeepAlive(context.Background(), "R58M123456")
+	if codeOf(err) != "ADB_KEEPALIVE_NOT_WIRELESS" {
+		t.Fatalf("error = %#v, want ADB_KEEPALIVE_NOT_WIRELESS", err)
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("usb keepalive reached adb: %#v", caller.calls)
+	}
+}
+
 func codeOf(err error) string {
 	if typed, ok := err.(*apperror.Error); ok {
 		return typed.ErrorCode

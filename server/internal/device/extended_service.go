@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 )
@@ -31,6 +32,21 @@ func (s *Service) EnableTCPIP(ctx context.Context, deviceID string, port int) er
 		return apperror.New("ADB_TCPIP_PORT_INVALID", "TCP/IP 端口必须在 1024 到 65535 之间", "device.connection", true)
 	}
 	_, err := s.Exec(ctx, DeviceArgs(deviceID, "tcpip", strconv.Itoa(port)))
+	return err
+}
+
+func (s *Service) KeepAlive(ctx context.Context, deviceID string) error {
+	if !strings.Contains(deviceID, ":") {
+		return apperror.New("ADB_KEEPALIVE_NOT_WIRELESS", "当前设备不是无线 ADB 连接，无需执行保活", "device.connection", true)
+	}
+	normalizedEndpoint, err := normalizeWirelessEndpoint(deviceID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Exec(ctx, []string{"connect", normalizedEndpoint}); err != nil {
+		return err
+	}
+	_, err = s.Exec(ctx, DeviceArgs(normalizedEndpoint, "shell", "true"))
 	return err
 }
 

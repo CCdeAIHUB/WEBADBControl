@@ -50,6 +50,14 @@ func (s *Server) enableDeviceTCPIP(writer http.ResponseWriter, request *http.Req
 	writeData(writer, http.StatusOK, map[string]any{"enabled": true, "port": body.Port})
 }
 
+func (s *Server) keepAliveDevice(writer http.ResponseWriter, request *http.Request) {
+	if err := s.devices.KeepAlive(request.Context(), request.PathValue("id")); err != nil {
+		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
+		return
+	}
+	writeData(writer, http.StatusOK, map[string]bool{"alive": true})
+}
+
 func (s *Server) deviceLockState(writer http.ResponseWriter, request *http.Request) {
 	state, err := s.devices.LockState(request.Context(), request.PathValue("id"))
 	if err != nil {

@@ -161,16 +161,10 @@ func (s *Server) terminal(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) packages(writer http.ResponseWriter, request *http.Request) {
-	output, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "shell", "pm", "list", "packages", "-3"))
+	packages, err := s.devices.Packages(request.Context(), request.PathValue("id"))
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, err)
 		return
-	}
-	packages := make([]string, 0)
-	for _, line := range strings.Split(output.Stdout, "\n") {
-		if name := strings.TrimPrefix(strings.TrimSpace(line), "package:"); packagePattern.MatchString(name) {
-			packages = append(packages, name)
-		}
 	}
 	writeData(writer, http.StatusOK, packages)
 }

@@ -133,8 +133,8 @@ onMounted(() => load())
         <span>修改时间</span>
         <span class="text-right">操作</span>
       </div>
-      <button v-for="entry in sortedEntries" :key="entry.path" class="grid min-w-[760px] grid-cols-[minmax(260px,1fr)_120px_140px_180px_96px] items-center border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50 dark:border-white/7 dark:hover:bg-white/3" @dblclick="openEntry(entry)">
-        <span class="flex min-w-0 items-center gap-3">
+      <div v-for="entry in sortedEntries" :key="entry.path" class="grid min-w-[760px] grid-cols-[minmax(260px,1fr)_120px_140px_180px_96px] items-center border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50 dark:border-white/7 dark:hover:bg-white/3" @dblclick="openEntry(entry)">
+        <button class="flex min-w-0 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25" :disabled="entry.type !== 'directory'" @click="openEntry(entry)">
           <span class="grid size-9 shrink-0 place-items-center rounded-lg" :class="entry.type === 'directory' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300' : entry.type === 'link' ? 'bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300' : 'bg-slate-100 text-slate-500 dark:bg-white/7 dark:text-slate-300'">
             <FolderOpen v-if="entry.type === 'directory'" :size="18" />
             <Folder v-else-if="entry.type === 'link'" :size="18" />
@@ -144,7 +144,7 @@ onMounted(() => load())
             <span class="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ entry.name }}</span>
             <span v-if="entry.target" class="mt-0.5 block truncate font-mono text-[10px] text-slate-400">→ {{ entry.target }}</span>
           </span>
-        </span>
+        </button>
         <span class="text-xs text-slate-500">{{ entry.type === 'directory' ? '文件夹' : formatFileSize(entry.size) }}</span>
         <span class="font-mono text-[11px] text-slate-400">{{ entry.permissions }}</span>
         <span class="font-mono text-[11px] text-slate-400">{{ entry.modified || '—' }}</span>
@@ -152,7 +152,7 @@ onMounted(() => load())
           <button v-if="entry.type !== 'directory'" class="icon-button" title="下载" @click.stop="download(entry)"><Download :size="15" /></button>
           <button class="icon-button hover:!border-red-200 hover:!bg-red-50 hover:!text-red-600 dark:hover:!border-red-500/20 dark:hover:!bg-red-500/10 dark:hover:!text-red-300" title="删除" @click.stop="pendingDelete = entry"><Trash2 :size="15" /></button>
         </span>
-      </button>
+      </div>
       <div v-if="!sortedEntries.length && !loading" class="grid min-h-72 place-items-center p-10 text-center">
         <div>
           <FolderOpen :size="30" class="mx-auto mb-3 text-slate-300" />

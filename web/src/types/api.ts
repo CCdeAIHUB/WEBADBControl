@@ -36,6 +36,15 @@ export interface DeviceFileEntry {
   target?: string
 }
 
+export interface PackageInfo {
+  package: string
+  displayName: string
+  apkPath?: string
+  versionCode?: number
+  iconText: string
+  iconColor: string
+}
+
 export interface AutomationPermissions {
   allowAdb: boolean
   allowShell: boolean
