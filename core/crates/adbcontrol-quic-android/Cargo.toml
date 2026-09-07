@@ -5,6 +5,8 @@ edition = "2021"
 license = "Apache-2.0"
 publish = false
 
+[workspace]
+
 [lib]
 name = "adbcontrol_quic"
 crate-type = ["cdylib"]

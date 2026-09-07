@@ -72,7 +72,7 @@ onMounted(load)
 <template>
   <div class="card overflow-hidden">
     <div class="flex flex-col gap-3 border-b border-slate-100 p-4 dark:border-white/7 sm:flex-row sm:items-center">
-      <div><h3 class="section-title m-0">应用管理</h3><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">第三方应用、APK 安装与应用控制</p></div>
+      <div><h3 class="section-title m-0">应用管理</h3><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">全量应用、APK 安装与应用控制；名称优先使用设备本机信息</p></div>
       <div class="ml-auto flex gap-2">
         <div class="flex items-center rounded-lg border border-slate-200 bg-white px-2.5 dark:border-white/10 dark:bg-white/5"><Search :size="15" class="text-slate-500 dark:text-slate-300" /><input v-model="query" class="h-9 w-48 border-0 bg-transparent px-2 text-xs text-slate-800 outline-none placeholder:text-slate-500 dark:text-slate-100 dark:placeholder:text-slate-400" placeholder="搜索名称或包名" /></div>
         <button class="btn-primary" @click="fileInput?.click()"><Upload :size="15" />安装 APK</button>
@@ -82,11 +82,20 @@ onMounted(load)
     <StateMessage v-if="loading" state="loading" title="正在读取应用目录" class="!border-0 !shadow-none" />
     <div v-else-if="filtered.length" class="divide-y divide-slate-100 dark:divide-white/7">
       <div v-for="app in filtered" :key="app.package" class="flex flex-wrap items-center gap-3 px-4 py-3">
-        <div class="grid size-11 place-items-center rounded-xl text-xs font-bold shadow-sm" :class="iconClass(app.iconColor)">{{ app.iconText }}</div>
+        <div class="grid size-11 place-items-center overflow-hidden rounded-xl text-xs font-bold shadow-sm" :class="app.iconPngBase64 ? 'bg-white ring-1 ring-slate-200 dark:bg-white/8 dark:ring-white/10' : iconClass(app.iconColor)">
+          <img v-if="app.iconPngBase64" :src="`data:image/png;base64,${app.iconPngBase64}`" :alt="`${app.displayName} 图标`" class="size-8 rounded-md object-contain" loading="lazy" />
+          <span v-else>{{ app.iconText }}</span>
+        </div>
         <div class="min-w-0 flex-1">
           <div class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ app.displayName }}</div>
           <div class="mt-0.5 truncate font-mono text-[11px] text-slate-500 dark:text-slate-300">{{ app.package }}</div>
           <div class="mt-1 flex flex-wrap gap-2 text-[10px] text-slate-500 dark:text-slate-400">
+            <span class="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 dark:bg-white/8 dark:text-slate-300">{{ app.system ? '系统应用' : '用户应用' }}</span>
+            <span v-if="app.enabled === false" class="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 dark:bg-white/8 dark:text-slate-300">已停用</span>
+            <span v-if="app.metadataSource === 'companion'" class="rounded bg-brand-50 px-1.5 py-0.5 font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">Companion 元数据</span>
+            <span v-else-if="app.metadataSource === 'adb-label'" class="rounded bg-sky-50 px-1.5 py-0.5 font-medium text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">ADB 名称</span>
+            <span v-else class="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">包名生成名称</span>
+            <span v-if="app.iconPngBase64" class="rounded bg-brand-50 px-1.5 py-0.5 font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">真实图标</span>
             <span v-if="app.versionCode">versionCode {{ app.versionCode }}</span>
             <span v-if="app.apkPath" class="max-w-xl truncate font-mono">{{ app.apkPath }}</span>
           </div>

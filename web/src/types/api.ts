@@ -15,6 +15,8 @@ export interface Device {
   product?: string
   state: 'device' | 'online' | 'offline' | 'unauthorized' | string
   transport: 'usb' | 'wireless' | 'companion' | string
+  hardwareId?: string
+  aliases?: string[]
 }
 
 export interface DeviceOverview {
@@ -39,10 +41,23 @@ export interface DeviceFileEntry {
 export interface PackageInfo {
   package: string
   displayName: string
+  hasResolvedDisplayName?: boolean
   apkPath?: string
   versionCode?: number
+  system?: boolean
+  enabled?: boolean
+  iconPngBase64?: string
+  metadataSource?: 'package-name' | 'adb-label' | 'companion' | string
   iconText: string
   iconColor: string
+}
+
+export interface CompanionStatus {
+  installed: boolean
+  adbResponsive: boolean
+  state: 'missing' | 'adb-responsive' | 'adb-unreachable' | string
+  message: string
+  errorCode?: string
 }
 
 export interface AutomationPermissions {

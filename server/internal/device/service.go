@@ -13,12 +13,14 @@ import (
 )
 
 type Device struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Model     string `json:"model,omitempty"`
-	Product   string `json:"product,omitempty"`
-	State     string `json:"state"`
-	Transport string `json:"transport"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Model      string   `json:"model,omitempty"`
+	Product    string   `json:"product,omitempty"`
+	State      string   `json:"state"`
+	Transport  string   `json:"transport"`
+	HardwareID string   `json:"hardwareId,omitempty"`
+	Aliases    []string `json:"aliases,omitempty"`
 }
 
 type CommandOutput struct {
@@ -52,7 +54,142 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseDevices(output.Stdout), nil
+	return s.attachIdentityAndDedupe(ctx, parseDevices(output.Stdout)), nil
+}
+
+func (s *Service) attachIdentityAndDedupe(ctx context.Context, devices []Device) []Device {
+	if len(devices) <= 1 {
+		return devices
+	}
+	identified := make([]Device, 0, len(devices))
+	for _, candidate := range devices {
+		device := candidate
+		if candidate.State == "device" {
+			if hardwareID, err := s.readHardwareID(ctx, candidate.ID); err == nil && hardwareID != "" {
+				device.HardwareID = hardwareID
+			}
+		}
+		if device.HardwareID == "" {
+			device.HardwareID = fallbackHardwareID(device)
+		}
+		identified = append(identified, device)
+	}
+	return dedupeDevicesByHardwareID(identified)
+}
+
+func (s *Service) readHardwareID(ctx context.Context, deviceID string) (string, error) {
+	// ADB may expose the same physical phone as USB and wireless transports.
+	// A stable device-side identifier lets the UI keep one card per handset instead of one card per transport.
+	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "printf 'serial='; getprop ro.serialno; printf '\nbootserial='; getprop ro.boot.serialno; printf '\nandroid_id='; settings get secure android_id 2>/dev/null"))
+	if err != nil {
+		return "", err
+	}
+	return ParseHardwareID(output.Stdout), nil
+}
+
+func ParseHardwareID(output string) string {
+	values := map[string]string{}
+	for _, line := range strings.Split(strings.ReplaceAll(output, "\r", ""), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		values[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	for _, key := range []string{"serial", "bootserial", "android_id"} {
+		if value := sanitizeHardwareID(values[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	return ""
+}
+
+func sanitizeHardwareID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if lower == "unknown" || lower == "null" || lower == "none" || lower == "0" {
+		return ""
+	}
+	return value
+}
+
+func fallbackHardwareID(device Device) string {
+	if device.Model != "" && device.Product != "" && device.Transport == "wireless" {
+		return "wireless:" + device.Product + ":" + device.Model
+	}
+	return "transport:" + device.ID
+}
+
+func dedupeDevicesByHardwareID(devices []Device) []Device {
+	result := make([]Device, 0, len(devices))
+	indexByHardwareID := map[string]int{}
+	for _, candidate := range devices {
+		key := candidate.HardwareID
+		if key == "" {
+			key = "transport:" + candidate.ID
+		}
+		if index, exists := indexByHardwareID[key]; exists {
+			kept := result[index]
+			kept.Aliases = appendUnique(kept.Aliases, candidate.ID)
+			kept.Aliases = appendUnique(kept.Aliases, candidate.Aliases...)
+			kept.Aliases = aliasesWithoutPrimary(kept.ID, kept.Aliases)
+			if shouldPreferDevice(candidate, kept) {
+				candidate.Aliases = appendUnique(append(candidate.Aliases, kept.ID), kept.Aliases...)
+				// Aliases identify alternate transports only; retaining the selected primary ID
+				// would make clients treat the same transport as both primary and fallback.
+				candidate.Aliases = aliasesWithoutPrimary(candidate.ID, candidate.Aliases)
+				result[index] = candidate
+			} else {
+				result[index] = kept
+			}
+			continue
+		}
+		indexByHardwareID[key] = len(result)
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func shouldPreferDevice(candidate, current Device) bool {
+	if candidate.State == "device" && current.State != "device" {
+		return true
+	}
+	if candidate.State != "device" && current.State == "device" {
+		return false
+	}
+	if candidate.Transport == "usb" && current.Transport == "wireless" {
+		return true
+	}
+	return false
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	result := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(values, additions...) {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func aliasesWithoutPrimary(primary string, aliases []string) []string {
+	result := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias != primary {
+			result = append(result, alias)
+		}
+	}
+	return result
 }
 
 func parseDevices(output string) []Device {

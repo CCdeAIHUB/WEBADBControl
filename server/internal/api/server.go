@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("GET /api/v1/devices/{id}/capabilities", s.capabilities)
 	router.HandleFunc("GET /api/v1/devices/{id}/permissions", s.permissions)
 	router.HandleFunc("POST /api/v1/devices/{id}/capabilities/invoke", s.invokeCapability)
+	router.HandleFunc("GET /api/v1/devices/{id}/companion/status", s.companionStatus)
 	router.HandleFunc("POST /api/v1/devices/{id}/companion/install", s.installCompanion)
 	router.HandleFunc("GET /api/v1/automation/tasks", s.listTasks)
 	router.HandleFunc("POST /api/v1/automation/tasks", s.saveTask)

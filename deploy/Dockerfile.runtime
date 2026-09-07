@@ -8,6 +8,7 @@ COPY core/adbcontrol-core ./adbcontrol-core
 COPY web/dist ./web
 COPY core/assets ./assets
 COPY core/android/companion-app/app/src/main ./companion-source
+COPY runtime-assets/companion/companion.apk ./companion.apk
 COPY runtime-assets/adb/linux-x86_64/adb ./assets/adb/linux-x86_64/adb
 
 RUN chmod +x ./webadbcontrol ./adbcontrol-core ./assets/adb/linux-x86_64/adb && \
@@ -19,6 +20,7 @@ ENV WEBADB_ADDRESS=0.0.0.0:8080 \
     WEBADB_CORE_BINARY=/opt/webadbcontrol/adbcontrol-core \
     WEBADB_DATA_DIR=/opt/webadbcontrol/data \
     WEBADB_WEB_DIR=/opt/webadbcontrol/web \
+    WEBADB_COMPANION_APK=/opt/webadbcontrol/companion.apk \
     HOME=/opt/webadbcontrol/data
 
 EXPOSE 8080

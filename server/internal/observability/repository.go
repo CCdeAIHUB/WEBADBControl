@@ -20,6 +20,8 @@ func OpenRepository(path string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
 	repository := &Repository{database: database}
 	if err := repository.migrate(context.Background()); err != nil {
 		_ = database.Close()
@@ -30,6 +32,8 @@ func OpenRepository(path string) (*Repository, error) {
 
 func (r *Repository) migrate(ctx context.Context) error {
 	_, err := r.database.ExecContext(ctx, `
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=3000;
 CREATE TABLE IF NOT EXISTS observability_events (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,

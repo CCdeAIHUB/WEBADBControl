@@ -15,6 +15,8 @@ const container = ref<HTMLElement>()
 let socket: WebSocket | undefined
 let intentionalClose = false
 let connectionSeq = 0
+let actionInFlight = false
+let lastActionAt = 0
 
 const statusText = computed(() => ({ idle: '未开始', connecting: '正在连接画面', live: '实时投屏中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
@@ -64,14 +66,18 @@ function reconnect() {
 }
 
 async function action(type: string, key?: string) {
+  if (!reserveActionSlot()) return
   try {
     await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify({ type, key }) })
   } catch (error) {
     ui.failure(toAppError(error))
+  } finally {
+    actionInFlight = false
   }
 }
 
 async function tap(event: MouseEvent) {
+  if (!reserveActionSlot()) return
   const image = event.currentTarget as HTMLImageElement
   const rect = image.getBoundingClientRect()
   const x = Math.round((event.clientX - rect.left) * image.naturalWidth / rect.width)
@@ -80,7 +86,17 @@ async function tap(event: MouseEvent) {
     await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify({ type: 'tap', x, y }) })
   } catch (error) {
     ui.failure(toAppError(error))
+  } finally {
+    actionInFlight = false
   }
+}
+
+function reserveActionSlot() {
+  const now = Date.now()
+  if (actionInFlight || now - lastActionAt < 220) return false
+  actionInFlight = true
+  lastActionAt = now
+  return true
 }
 
 function fullscreen() { container.value?.requestFullscreen() }

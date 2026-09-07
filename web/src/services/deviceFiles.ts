@@ -43,3 +43,7 @@ export function sortFileEntries(entries: DeviceFileEntry[]): DeviceFileEntry[] {
     return left.name.localeCompare(right.name, 'zh-Hans-CN')
   })
 }
+
+export function canOpenEntry(entry: DeviceFileEntry): boolean {
+  return entry.type === 'directory'
+}

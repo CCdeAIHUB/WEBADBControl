@@ -13,15 +13,20 @@ const stateError = ref<AppError | null>(null)
 const expanded = ref(false)
 const pin = ref('')
 const busy = ref(false)
+let refreshing = false
 let timer = 0
 
 async function refresh() {
+  if (refreshing || document.hidden) return
+  refreshing = true
   try {
     state.value = await api(`/devices/${encodeURIComponent(props.deviceId)}/lock`)
     stateError.value = null
   } catch (error) {
     state.value = null
     stateError.value = toAppError(error)
+  } finally {
+    refreshing = false
   }
 }
 
@@ -32,7 +37,7 @@ async function unlock() {
   finally { busy.value=false }
 }
 
-onMounted(() => { void refresh(); timer=window.setInterval(refresh,5000) })
+onMounted(() => { void refresh(); timer=window.setInterval(refresh,30000) })
 onBeforeUnmount(() => window.clearInterval(timer))
 </script>
 

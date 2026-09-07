@@ -8,13 +8,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 )
 
 // ProcessTransport serializes requests because the original Core stdio protocol
 // is ordered JSON Lines. The mutex is a protocol invariant, not a performance shortcut.
 type ProcessTransport struct {
-	mu      sync.Mutex
+	mu      chan struct{}
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	scanner *bufio.Scanner
@@ -37,12 +36,14 @@ func StartProcess(ctx context.Context, binary string) (*ProcessTransport, error)
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	return &ProcessTransport{command: command, stdin: stdin, scanner: scanner}, nil
+	return &ProcessTransport{mu: make(chan struct{}, 1), command: command, stdin: stdin, scanner: scanner}, nil
 }
 
 func (t *ProcessTransport) RoundTrip(ctx context.Context, request Request) (Response, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if err := t.lock(ctx); err != nil {
+		return Response{}, err
+	}
+	defer t.unlock()
 
 	select {
 	case <-ctx.Done():
@@ -70,11 +71,27 @@ func (t *ProcessTransport) RoundTrip(ctx context.Context, request Request) (Resp
 }
 
 func (t *ProcessTransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	_ = t.lock(context.Background())
+	defer t.unlock()
 	_ = t.stdin.Close()
 	if t.command.Process != nil {
 		_ = t.command.Process.Kill()
 	}
 	return t.command.Wait()
+}
+
+func (t *ProcessTransport) lock(ctx context.Context) error {
+	select {
+	case t.mu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (t *ProcessTransport) unlock() {
+	select {
+	case <-t.mu:
+	default:
+	}
 }

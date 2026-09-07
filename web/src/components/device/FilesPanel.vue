@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Download, File, Folder, FolderOpen, FolderPlus, FolderUp, HardDrive, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 import { api, toAppError } from '@/services/api'
-import { formatFileSize, joinRemotePath, normalizeRemotePath, parentRemotePath, pathSegments, sortFileEntries } from '@/services/deviceFiles'
+import { canOpenEntry, formatFileSize, joinRemotePath, normalizeRemotePath, parentRemotePath, pathSegments, sortFileEntries } from '@/services/deviceFiles'
 import { useUiStore } from '@/stores/ui'
 import type { DeviceFileEntry } from '@/types/api'
 
@@ -34,7 +34,7 @@ async function load(path = currentPath.value) {
 }
 
 function openEntry(entry: DeviceFileEntry) {
-  if (entry.type === 'directory') void load(entry.path)
+  if (canOpenEntry(entry)) void load(entry.path)
 }
 
 async function upload(event: Event) {
@@ -133,8 +133,8 @@ onMounted(() => load())
         <span>修改时间</span>
         <span class="text-right">操作</span>
       </div>
-      <div v-for="entry in sortedEntries" :key="entry.path" class="grid min-w-[760px] grid-cols-[minmax(260px,1fr)_120px_140px_180px_96px] items-center border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50 dark:border-white/7 dark:hover:bg-white/3" @dblclick="openEntry(entry)">
-        <button class="flex min-w-0 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25" :disabled="entry.type !== 'directory'" @click="openEntry(entry)">
+      <div v-for="entry in sortedEntries" :key="entry.path" class="grid min-w-[760px] grid-cols-[minmax(260px,1fr)_120px_140px_180px_96px] items-center border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50 dark:border-white/7 dark:hover:bg-white/3" :class="entry.type === 'directory' ? 'cursor-pointer' : ''" @click="openEntry(entry)" @dblclick="openEntry(entry)">
+        <button class="flex min-w-0 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25" :class="entry.type === 'directory' ? 'cursor-pointer' : 'cursor-default'" @click.stop="openEntry(entry)">
           <span class="grid size-9 shrink-0 place-items-center rounded-lg" :class="entry.type === 'directory' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300' : entry.type === 'link' ? 'bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300' : 'bg-slate-100 text-slate-500 dark:bg-white/7 dark:text-slate-300'">
             <FolderOpen v-if="entry.type === 'directory'" :size="18" />
             <Folder v-else-if="entry.type === 'link'" :size="18" />

@@ -76,7 +76,9 @@ func (s *Server) deviceAction(writer http.ResponseWriter, request *http.Request)
 	if !decodeJSON(writer, request, &body) {
 		return
 	}
-	if err := s.devices.Action(request.Context(), request.PathValue("id"), body); err != nil {
+	ctx, cancel := withTimeout(request, 5*time.Second)
+	defer cancel()
+	if err := s.devices.Action(ctx, request.PathValue("id"), body); err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
@@ -117,8 +119,19 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		png, err := s.devices.Screenshot(request.Context(), request.PathValue("id"))
+		frameCtx, cancel := context.WithTimeout(request.Context(), 1500*time.Millisecond)
+		png, err := s.devices.Screenshot(frameCtx, request.PathValue("id"))
+		cancel()
 		if err != nil {
+			if frameCtx.Err() != nil {
+				s.logger.Warn("screen_frame_timeout", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"))
+				select {
+				case <-request.Context().Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
 			encoded, encodeErr := json.Marshal(map[string]any{"type": "error", "message": err.Error()})
 			if encodeErr != nil {
 				s.logger.Error("screen_error_encode_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", encodeErr)
@@ -364,6 +377,17 @@ func (s *Server) coreResult(writer http.ResponseWriter, request *http.Request, m
 		return
 	}
 	writeData(writer, http.StatusOK, result)
+}
+
+func (s *Server) companionStatus(writer http.ResponseWriter, request *http.Request) {
+	ctx, cancel := withTimeout(request, 3*time.Second)
+	defer cancel()
+	status, err := s.devices.CompanionStatus(ctx, request.PathValue("id"))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writeData(writer, http.StatusOK, status)
 }
 
 func (s *Server) installCompanion(writer http.ResponseWriter, request *http.Request) {

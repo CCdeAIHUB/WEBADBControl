@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatFileSize, joinRemotePath, parentRemotePath, pathSegments, sortFileEntries } from './deviceFiles'
+import { canOpenEntry, formatFileSize, joinRemotePath, parentRemotePath, pathSegments, sortFileEntries } from './deviceFiles'
 
 describe('deviceFiles helpers', () => {
   it('keeps remote paths normalized for device file operations', () => {
@@ -26,5 +26,12 @@ describe('deviceFiles helpers', () => {
     expect(formatFileSize(0)).toBe('—')
     expect(formatFileSize(2048)).toBe('2.0 KB')
     expect(formatFileSize(12 * 1024 * 1024)).toBe('12 MB')
+  })
+
+  it('only treats directories as openable entries', () => {
+    // 场景：文件管理点击目录必须进入目录，普通文件和链接不能触发目录切换。
+    expect(canOpenEntry({ name: 'Download', path: '/sdcard/Download', type: 'directory', permissions: 'd', size: 0 })).toBe(true)
+    expect(canOpenEntry({ name: 'a.txt', path: '/sdcard/a.txt', type: 'file', permissions: '-', size: 1 })).toBe(false)
+    expect(canOpenEntry({ name: 'DCIM', path: '/sdcard/DCIM', type: 'link', permissions: 'l', size: 0 })).toBe(false)
   })
 })

@@ -11,7 +11,8 @@ func TestParseLockStateRecognizesOEMFormats(t *testing.T) {
 	}{
 		{"aosp locked", "mShowingLockscreen=true\nmScreenOnFully=true", LockState{Locked: true, Awake: true, Known: true}},
 		{"miui unlocked", "deviceLocked=0\ninteractiveState=AWAKE", LockState{Locked: false, Awake: true, Known: true}},
-		{"coloros locked", "showing=true\nisInteractive=false", LockState{Locked: true, Awake: false, Known: true}},
+		{"coloros locked", "KeyguardServiceDelegate showing=true\nisInteractive=false", LockState{Locked: true, Awake: false, Known: true}},
+		{"samsung external display unlocked", "Display 2 showing=true\nWindowState showing=true\nisKeyguardLocked=false\nisInteractive=true", LockState{Locked: false, Awake: true, Known: true}},
 		{"unknown", "window policy output without state", LockState{Known: false}},
 	}
 	for _, test := range cases {

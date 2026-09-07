@@ -4,31 +4,57 @@ import { CheckCircle2, Download, KeyRound, Play, RefreshCw, ShieldAlert, Smartph
 import UiSelect from '@/components/common/UiSelect.vue'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
+import type { CompanionStatus } from '@/types/api'
 
 const props = defineProps<{ deviceId: string }>()
 const ui = useUiStore()
 const capabilities = ref<Array<Record<string, any>>>([])
 const permissions = ref<Array<Record<string, any>>>([])
+const status = ref<CompanionStatus | null>(null)
 const loading = ref(false)
+const opening = ref(false)
 const selected = ref<Record<string, any> | null>(null)
 const operation = ref('')
 const argumentsJson = ref('{}')
 const companionError = ref('')
 
-const connected = computed(() => capabilities.value.length > 0 || permissions.value.length > 0)
+const quicConnected = computed(() => capabilities.value.length > 0 || permissions.value.length > 0)
+const statusTone = computed(() => {
+  if (quicConnected.value) return 'connected'
+  if (status.value?.adbResponsive) return 'adb'
+  if (status.value?.installed === false) return 'missing'
+  return 'warning'
+})
+const statusTitle = computed(() => {
+  if (quicConnected.value) return '伴侣 QUIC 会话已连接'
+  if (status.value?.adbResponsive) return '伴侣 App ADB 可达'
+  if (status.value?.installed === false) return '未安装伴侣应用'
+  return '等待伴侣连接'
+})
+const statusMessage = computed(() => {
+  if (quicConnected.value) return '已通过原 Core/QUIC 同步能力目录，可以使用完整伴侣能力。'
+  if (status.value?.adbResponsive) return 'App 已安装且 broadcast 探测正常；如果能力目录为空，请在手机端确认 Companion 服务与权限。'
+  return status.value?.message || '请按流程安装、打开并授权 Companion。'
+})
 
 async function load() {
   loading.value = true
   companionError.value = ''
-  try {
-    ;[capabilities.value, permissions.value] = await Promise.all([
-      api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/capabilities`),
-      api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/permissions`),
-    ])
-  } catch (error) {
-    const appError = toAppError(error)
-    companionError.value = `${appError.message}（${appError.errorCode}）`
-  } finally { loading.value = false }
+  const [statusResult, capabilitiesResult, permissionsResult] = await Promise.allSettled([
+    api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`),
+    api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/capabilities`),
+    api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/permissions`),
+  ])
+  if (statusResult.status === 'fulfilled') status.value = statusResult.value
+  else companionError.value = `${toAppError(statusResult.reason).message}（${toAppError(statusResult.reason).errorCode}）`
+  capabilities.value = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : []
+  permissions.value = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
+  const syncError = capabilitiesResult.status === 'rejected' ? capabilitiesResult.reason : permissionsResult.status === 'rejected' ? permissionsResult.reason : null
+  if (syncError) {
+    const appError = toAppError(syncError)
+    companionError.value = companionError.value || `能力同步失败：${appError.message}（${appError.errorCode}）`
+  }
+  loading.value = false
 }
 
 function permissionFor(id: string) { return permissions.value.find(item => item.capabilityId === id) }
@@ -39,10 +65,13 @@ async function install() {
 }
 
 async function openCompanion() {
+  if (opening.value) return
+  opening.value = true
   try {
     await api(`/devices/${encodeURIComponent(props.deviceId)}/terminal`, { method: 'POST', body: JSON.stringify({ args: ['shell', 'monkey', '-p', 'com.adbcontrol.companion', '1'] }) })
     ui.notify('已尝试打开伴侣应用', '如设备未响应，请在手机上手动打开 ADBControl Companion。', 'success')
   } catch (error) { ui.failure(toAppError(error)) }
+  finally { opening.value = false }
 }
 
 async function invoke() {
@@ -73,12 +102,13 @@ onMounted(load)
         </div>
         <ol class="mt-5 space-y-3">
           <li class="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5"><span class="grid size-6 shrink-0 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">1</span><div><div class="text-sm font-semibold">安装伴侣应用</div><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">将服务端打包的 Companion APK 安装到当前设备。</p><button class="btn-secondary mt-3" @click="install"><Download :size="15" />安装 / 覆盖安装</button></div></li>
-          <li class="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5"><span class="grid size-6 shrink-0 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">2</span><div><div class="text-sm font-semibold">打开应用并完成授权</div><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">在手机端允许通知、无障碍、悬浮窗等所需权限，并保持伴侣服务在线。</p><button class="btn-secondary mt-3" @click="openCompanion"><Smartphone :size="15" />尝试打开伴侣</button></div></li>
+          <li class="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5"><span class="grid size-6 shrink-0 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">2</span><div><div class="text-sm font-semibold">打开应用并完成授权</div><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">在手机端允许通知、无障碍、悬浮窗等所需权限，并保持伴侣服务在线；系统不会在控制过程中自动反复调起 App。</p><button class="btn-secondary mt-3 disabled:cursor-not-allowed disabled:opacity-60" :disabled="opening" @click="openCompanion"><Smartphone :size="15" />{{ opening ? '正在打开…' : '手动打开伴侣' }}</button></div></li>
           <li class="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5"><span class="grid size-6 shrink-0 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">3</span><div><div class="text-sm font-semibold">同步能力与权限</div><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">Web 服务通过原 Core/QUIC 获取能力目录，不绕过原核心。</p><button class="btn-primary mt-3" @click="load"><RefreshCw :size="15" :class="loading ? 'animate-spin' : ''" />刷新连接状态</button></div></li>
         </ol>
-        <div class="mt-4 rounded-lg border px-3 py-2 text-xs" :class="connected ? 'border-brand-200 bg-brand-50 text-brand-800 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300'">
-          <span class="font-semibold">{{ connected ? '伴侣会话已连接' : '等待伴侣会话连接' }}</span>
-          <span v-if="companionError" class="ml-1">{{ companionError }}</span>
+        <div class="mt-4 rounded-lg border px-3 py-2 text-xs" :class="statusTone === 'connected' ? 'border-brand-200 bg-brand-50 text-brand-800 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300' : statusTone === 'adb' ? 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200' : statusTone === 'missing' ? 'border-slate-200 bg-slate-50 text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300'">
+          <span class="font-semibold">{{ statusTitle }}</span>
+          <span class="ml-1">{{ statusMessage }}</span>
+          <span v-if="companionError" class="ml-1">诊断：{{ companionError }}</span>
         </div>
       </div>
     </section>

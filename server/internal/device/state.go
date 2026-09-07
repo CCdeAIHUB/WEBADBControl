@@ -18,24 +18,52 @@ type LockState struct {
 func ParseLockState(output string) LockState {
 	normalized := strings.ToLower(strings.ReplaceAll(output, " ", ""))
 	state := LockState{}
-	for _, marker := range []string{"mshowinglockscreen=true", "showing=true", "devicelocked=1", "devicelocked=true", "isstatusbarkeyguard=true", "keyguardshowing=true"} {
+	for _, marker := range []string{"mshowinglockscreen=true", "devicelocked=1", "devicelocked=true", "isstatusbarkeyguard=true", "keyguardshowing=true", "iskeyguardlocked=true"} {
 		if strings.Contains(normalized, marker) {
 			state.Locked, state.Known = true, true
 			break
 		}
 	}
 	if !state.Known {
-		for _, marker := range []string{"mshowinglockscreen=false", "showing=false", "devicelocked=0", "devicelocked=false", "isstatusbarkeyguard=false", "keyguardshowing=false"} {
+		for _, marker := range []string{"mshowinglockscreen=false", "devicelocked=0", "devicelocked=false", "isstatusbarkeyguard=false", "keyguardshowing=false", "iskeyguardlocked=false"} {
 			if strings.Contains(normalized, marker) {
 				state.Known = true
 				break
 			}
 		}
 	}
+	if !state.Known {
+		state = parseContextualKeyguardShowing(output, state)
+	}
 	for _, marker := range []string{"mscreenonfully=true", "interactivestate=awake", "mwakefulness=awake", "isinteractive=true", "displaypowerstate=on"} {
 		if strings.Contains(normalized, marker) {
 			state.Awake = true
 			break
+		}
+	}
+	return state
+}
+
+func parseContextualKeyguardShowing(output string, state LockState) LockState {
+	for _, line := range strings.Split(strings.ReplaceAll(output, "\r", ""), "\n") {
+		normalizedLine := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(line), " ", ""))
+		if !strings.Contains(normalizedLine, "showing=") {
+			continue
+		}
+		// Samsung foldables with external displays can include unrelated Window/Display
+		// "showing=true" fields while the keyguard is not active. Treat generic
+		// showing as lock state only when the same line explicitly belongs to keyguard
+		// or lockscreen policy output.
+		if !strings.Contains(normalizedLine, "keyguard") && !strings.Contains(normalizedLine, "lockscreen") {
+			continue
+		}
+		if strings.Contains(normalizedLine, "showing=true") {
+			state.Locked, state.Known = true, true
+			return state
+		}
+		if strings.Contains(normalizedLine, "showing=false") {
+			state.Known = true
+			return state
 		}
 	}
 	return state
