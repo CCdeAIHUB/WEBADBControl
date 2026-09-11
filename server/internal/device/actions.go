@@ -8,14 +8,16 @@ import (
 )
 
 type ActionRequest struct {
-	Type       string `json:"type"`
-	X          int    `json:"x,omitempty"`
-	Y          int    `json:"y,omitempty"`
-	EndX       int    `json:"endX,omitempty"`
-	EndY       int    `json:"endY,omitempty"`
-	DurationMS int    `json:"durationMs,omitempty"`
-	Key        string `json:"key,omitempty"`
-	Text       string `json:"text,omitempty"`
+	Type             string `json:"type"`
+	X                int    `json:"x,omitempty"`
+	Y                int    `json:"y,omitempty"`
+	EndX             int    `json:"endX,omitempty"`
+	EndY             int    `json:"endY,omitempty"`
+	DurationMS       int    `json:"durationMs,omitempty"`
+	CoordinateWidth  int    `json:"coordinateWidth,omitempty"`
+	CoordinateHeight int    `json:"coordinateHeight,omitempty"`
+	Key              string `json:"key,omitempty"`
+	Text             string `json:"text,omitempty"`
 }
 
 func ActionArguments(deviceID string, action ActionRequest) ([]string, error) {

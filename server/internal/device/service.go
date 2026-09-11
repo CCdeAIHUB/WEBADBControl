@@ -271,7 +271,10 @@ func (s *Service) Action(ctx context.Context, deviceID string, request ActionReq
 		return apperror.Wrap("DEVICE_ACTION_INVALID", "设备操作参数无效", "device.control", false, err)
 	}
 	_, err = s.Exec(ctx, args)
-	return err
+	if err == nil || !isInputInjectionDenied(err) {
+		return err
+	}
+	return s.fallbackDeniedInput(ctx, deviceID, request)
 }
 
 func (s *Service) Screenshot(ctx context.Context, deviceID string) ([]byte, error) {

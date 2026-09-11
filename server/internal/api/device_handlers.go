@@ -115,7 +115,9 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	}
 	defer connection.Close()
 	settings := s.settings.Get(false)
-	interval := time.Second / time.Duration(settings.ScreenFPS)
+	fps := screenFrameRate(request.URL.Query().Get("fps"), settings.ScreenFPS)
+	interval := time.Second / time.Duration(fps)
+	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "adb-screenshot", "requestedFps", request.URL.Query().Get("fps"), "effectiveFps", fps)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -152,6 +154,23 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 		case <-ticker.C:
 		}
 	}
+}
+
+func screenFrameRate(requested string, configured int) int {
+	if configured < 1 || configured > 10 {
+		configured = 2
+	}
+	if strings.TrimSpace(requested) == "" {
+		return configured
+	}
+	fps, err := strconv.Atoi(requested)
+	if err != nil || fps < 1 {
+		return configured
+	}
+	if fps > 10 {
+		return 10
+	}
+	return fps
 }
 
 func (s *Server) terminal(writer http.ResponseWriter, request *http.Request) {

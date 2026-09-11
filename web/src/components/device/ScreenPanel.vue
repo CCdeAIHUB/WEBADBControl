@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Expand, Home, LoaderCircle, MousePointer2, Play, Power, RotateCcw, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
+import { Expand, Home, LoaderCircle, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
+import UiSelect from '@/components/common/UiSelect.vue'
 
 const props = defineProps<{ deviceId: string; active: boolean }>()
 const ui = useUiStore()
@@ -12,13 +13,15 @@ const frameCount = ref(0)
 const lastFrameAt = ref('')
 const connected = ref(false)
 const container = ref<HTMLElement>()
+const requestedFPS = ref('2')
+const pointerStart = ref<{ x: number; y: number; clientX: number; clientY: number; at: number }>()
 let socket: WebSocket | undefined
 let intentionalClose = false
 let connectionSeq = 0
 let actionInFlight = false
 let lastActionAt = 0
 
-const statusText = computed(() => ({ idle: '未开始', connecting: '正在连接画面', live: '实时投屏中', error: '画面已断开' })[status.value])
+const statusText = computed(() => ({ idle: '投屏未开启', connecting: '正在启动兼容投屏', live: '兼容投屏运行中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
 
 function start() {
@@ -29,7 +32,7 @@ function start() {
   const seq = connectionSeq + 1
   connectionSeq = seq
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen`)
+  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}`)
   socket = current
   current.binaryType = 'blob'
   current.onmessage = (event) => {
@@ -65,10 +68,10 @@ function reconnect() {
   start()
 }
 
-async function action(type: string, key?: string) {
+async function sendAction(payload: Record<string, unknown>) {
   if (!reserveActionSlot()) return
   try {
-    await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify({ type, key }) })
+    await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify(payload) })
   } catch (error) {
     ui.failure(toAppError(error))
   } finally {
@@ -76,19 +79,35 @@ async function action(type: string, key?: string) {
   }
 }
 
-async function tap(event: MouseEvent) {
-  if (!reserveActionSlot()) return
+function imagePoint(event: PointerEvent) {
   const image = event.currentTarget as HTMLImageElement
   const rect = image.getBoundingClientRect()
-  const x = Math.round((event.clientX - rect.left) * image.naturalWidth / rect.width)
-  const y = Math.round((event.clientY - rect.top) * image.naturalHeight / rect.height)
-  try {
-    await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify({ type: 'tap', x, y }) })
-  } catch (error) {
-    ui.failure(toAppError(error))
-  } finally {
-    actionInFlight = false
+  return {
+    x: Math.max(0, Math.min(image.naturalWidth - 1, Math.round((event.clientX - rect.left) * image.naturalWidth / rect.width))),
+    y: Math.max(0, Math.min(image.naturalHeight - 1, Math.round((event.clientY - rect.top) * image.naturalHeight / rect.height))),
+    width: image.naturalWidth,
+    height: image.naturalHeight,
   }
+}
+
+function beginPointer(event: PointerEvent) {
+  const point = imagePoint(event)
+  pointerStart.value = { x: point.x, y: point.y, clientX: event.clientX, clientY: event.clientY, at: Date.now() }
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+}
+
+function finishPointer(event: PointerEvent) {
+  const start = pointerStart.value
+  pointerStart.value = undefined
+  if (!start) return
+  const end = imagePoint(event)
+  const distance = Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY)
+  if (distance < 10) {
+    void sendAction({ type: 'tap', x: end.x, y: end.y, coordinateWidth: end.width, coordinateHeight: end.height })
+    return
+  }
+  const durationMs = Math.max(80, Math.min(3000, Date.now() - start.at))
+  void sendAction({ type: 'swipe', x: start.x, y: start.y, endX: end.x, endY: end.y, durationMs, coordinateWidth: end.width, coordinateHeight: end.height })
 }
 
 function reserveActionSlot() {
@@ -101,7 +120,8 @@ function reserveActionSlot() {
 
 function fullscreen() { container.value?.requestFullscreen() }
 
-watch(() => props.active, (active) => active ? start() : stop(), { immediate: true })
+watch(() => props.active, (active) => { if (!active) stop() }, { immediate: true })
+watch(requestedFPS, () => { if (connected.value) reconnect() })
 onBeforeUnmount(() => { stop(); if (frame.value) URL.revokeObjectURL(frame.value) })
 </script>
 
@@ -112,24 +132,35 @@ onBeforeUnmount(() => { stop(); if (frame.value) URL.revokeObjectURL(frame.value
       <span class="text-xs font-medium">{{ statusText }}</span>
       <span class="hidden font-mono text-[10px] text-slate-500 sm:inline">帧 {{ frameCount }} · {{ lastFrameAt || '等待首帧' }}</span>
       <div class="ml-auto flex items-center gap-1.5">
-        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="canStop" @click="start"><Play :size="14" />开始</button>
+        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="canStop" @click="start"><Play :size="14" />开启投屏</button>
         <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" @click="reconnect"><RotateCcw :size="14" />重连</button>
-        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="!canStop" @click="stop"><StopCircle :size="14" />停止</button>
+        <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="!canStop" @click="stop"><StopCircle :size="14" />停止投屏</button>
         <button class="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/8 hover:text-white" aria-label="全屏" @click="fullscreen"><Expand :size="16" /></button>
       </div>
     </div>
+    <div class="flex flex-wrap items-center gap-3 border-b border-white/8 bg-white/[.025] px-4 py-2.5 text-xs text-slate-300">
+      <SlidersHorizontal :size="15" class="text-brand-400" />
+      <span class="font-medium text-slate-200">投屏参数</span>
+      <label class="flex items-center gap-2">刷新帧率
+        <UiSelect v-model="requestedFPS" class="!h-8 !w-28 !border-white/10 !bg-white/5 !text-xs !text-slate-100" aria-label="投屏刷新帧率">
+          <option value="1">1 FPS · 省流</option><option value="2">2 FPS · 均衡</option><option value="5">5 FPS · 流畅</option><option value="10">10 FPS · 极限</option>
+        </UiSelect>
+      </label>
+      <span class="rounded-md border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-amber-200">后端：ADB 兼容截图流</span>
+      <span class="text-slate-500">分辨率跟随设备；当前链路不是 scrcpy H.264</span>
+    </div>
     <div class="relative grid min-h-[460px] place-items-center p-5">
-      <img v-if="frame" :src="frame" alt="设备实时屏幕" class="max-h-[680px] max-w-full cursor-crosshair select-none rounded-md object-contain shadow-2xl" draggable="false" @click="tap" />
-      <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p><p class="mt-2 text-xs">进入本页会自动连接，也可以手动重连。</p></div>
+      <img v-if="frame" :src="frame" alt="设备实时屏幕" class="max-h-[680px] max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" draggable="false" @pointerdown.prevent="beginPointer" @pointerup.prevent="finishPointer" @pointercancel="pointerStart = undefined" />
+      <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p><p class="mt-2 text-xs">请点击“开启投屏”；画面支持点击和拖动滑动。</p></div>
     </div>
     <div class="flex flex-wrap items-center justify-center gap-1.5 border-t border-white/8 bg-white/[.025] p-2.5">
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="返回" @click="action('key', 'BACK')"><RotateCcw :size="17" /></button>
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="主页" @click="action('key', 'HOME')"><Home :size="17" /></button>
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="最近任务" @click="action('key', 'APP_SWITCH')"><Square :size="16" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="返回" @click="sendAction({ type: 'key', key: 'BACK' })"><RotateCcw :size="17" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="主页" @click="sendAction({ type: 'key', key: 'HOME' })"><Home :size="17" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="最近任务" @click="sendAction({ type: 'key', key: 'APP_SWITCH' })"><Square :size="16" /></button>
       <span class="mx-1 h-5 w-px bg-white/10" />
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="音量减" @click="action('key', 'VOLUME_DOWN')"><Volume1 :size="17" /></button>
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="音量加" @click="action('key', 'VOLUME_UP')"><Volume2 :size="17" /></button>
-      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="电源键" @click="action('key', 'POWER')"><Power :size="17" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="音量减" @click="sendAction({ type: 'key', key: 'VOLUME_DOWN' })"><Volume1 :size="17" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="音量加" @click="sendAction({ type: 'key', key: 'VOLUME_UP' })"><Volume2 :size="17" /></button>
+      <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="电源键" @click="sendAction({ type: 'key', key: 'POWER' })"><Power :size="17" /></button>
     </div>
   </div>
 </template>

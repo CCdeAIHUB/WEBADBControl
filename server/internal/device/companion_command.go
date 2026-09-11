@@ -45,7 +45,36 @@ func (s *Service) ExecuteCompanionCommand(ctx context.Context, deviceID, capabil
 	if _, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", command)); err != nil {
 		return "", err
 	}
-	return s.readCompanionCommandResult(ctx, deviceID, requestID)
+	payload, err := s.readCompanionCommandResult(ctx, deviceID, requestID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateCompanionCommandResult(payload); err != nil {
+		return "", err
+	}
+	return payload, nil
+}
+
+type companionCommandEnvelope struct {
+	OK    bool            `json:"ok"`
+	Error *apperror.Error `json:"error,omitempty"`
+}
+
+func validateCompanionCommandResult(payload string) error {
+	var result companionCommandEnvelope
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return apperror.Wrap("COMPANION_RESULT_INVALID", "Companion 返回了无法解析的结果", "device.companion", true, err)
+	}
+	if result.OK {
+		return nil
+	}
+	if result.Error != nil && result.Error.ErrorCode != "" {
+		if result.Error.TraceID == "" {
+			result.Error.TraceID = randomRequestID()
+		}
+		return result.Error
+	}
+	return apperror.New("COMPANION_COMMAND_FAILED", "Companion 命令执行失败", "device.companion", true)
 }
 
 func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (CompanionStatus, error) {
