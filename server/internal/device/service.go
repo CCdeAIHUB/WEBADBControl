@@ -200,7 +200,7 @@ func parseDevices(output string) []Device {
 			continue
 		}
 		device := Device{ID: fields[0], Name: fields[0], State: fields[1], Transport: "usb"}
-		if strings.Contains(device.ID, ":") {
+		if isWirelessADBIdentity(device.ID) {
 			device.Transport = "wireless"
 		}
 		for _, field := range fields[2:] {
@@ -220,6 +220,27 @@ func parseDevices(output string) []Device {
 	return devices
 }
 
+func isWirelessADBIdentity(deviceID string) bool {
+	return strings.Contains(deviceID, ":") ||
+		strings.Contains(deviceID, "._adb-tls-connect._tcp") ||
+		strings.Contains(deviceID, "._adb._tcp")
+}
+
+func isOnlineEndpoint(candidate Device, endpoint string) bool {
+	if candidate.State != "device" {
+		return false
+	}
+	if candidate.ID == endpoint {
+		return true
+	}
+	for _, alias := range candidate.Aliases {
+		if alias == endpoint {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) Connect(ctx context.Context, endpoint string) error {
 	normalizedEndpoint, err := normalizeWirelessEndpoint(endpoint)
 	if err != nil {
@@ -233,7 +254,10 @@ func (s *Service) Connect(ctx context.Context, endpoint string) error {
 		return err
 	}
 	for _, candidate := range devices {
-		if candidate.ID == normalizedEndpoint && candidate.State == "device" {
+		// Hardware-ID deduplication may retain the mDNS serial or USB serial as
+		// primary and preserve the requested IP endpoint as an alias. Verification
+		// must accept that alias, while still requiring ADB's online "device" state.
+		if isOnlineEndpoint(candidate, normalizedEndpoint) {
 			return nil
 		}
 	}

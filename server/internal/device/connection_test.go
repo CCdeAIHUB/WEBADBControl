@@ -23,6 +23,24 @@ func (c *connectionCaller) Call(_ context.Context, method string, params any, ta
 	return nil
 }
 
+type scriptedConnectionCaller struct {
+	calls   [][]string
+	outputs []CommandOutput
+}
+
+func (c *scriptedConnectionCaller) Call(_ context.Context, method string, params any, target any) error {
+	if method != "adb.exec" {
+		return nil
+	}
+	args := params.(map[string]any)["args"].([]string)
+	c.calls = append(c.calls, append([]string(nil), args...))
+	if len(c.outputs) > 0 {
+		*(target.(*CommandOutput)) = c.outputs[0]
+		c.outputs = c.outputs[1:]
+	}
+	return nil
+}
+
 func TestPairNormalizesEndpointAndCodeBeforeADB(t *testing.T) {
 	// 场景：用户复制的地址和六位码可能带空格；服务端必须规范化后按独立参数传给 ADB。
 	caller := &connectionCaller{}
@@ -69,6 +87,29 @@ func TestDiscoverReportsUnsupportedADBInsteadOfGenericFailure(t *testing.T) {
 
 	if codeOf(err) != "ADB_MDNS_UNSUPPORTED" {
 		t.Fatalf("error = %#v, want ADB_MDNS_UNSUPPORTED", err)
+	}
+}
+
+func TestConnectAcceptsOnlineEndpointPreservedAsDedupeAlias(t *testing.T) {
+	// 场景：ADB 同时报告 IP 端点和 mDNS 序列时，硬件去重可能把 IP 放入 aliases；连接验证仍必须成功。
+	caller := &scriptedConnectionCaller{outputs: []CommandOutput{
+		{Stdout: "connected to 192.168.3.168:37481\n"},
+		{Stdout: "List of devices attached\n192.168.3.168:37481 device product:onyx model:25053RT47C\nadb-16a424c7-X9sGA6._adb-tls-connect._tcp device product:onyx model:25053RT47C\n"},
+		{Stdout: "serial=16a424c7\nbootserial=\nandroid_id=abc\n"},
+		{Stdout: "serial=16a424c7\nbootserial=\nandroid_id=abc\n"},
+	}}
+
+	if err := NewService(caller).Connect(context.Background(), "192.168.3.168:37481"); err != nil {
+		t.Fatalf("Connect() error = %v, want online endpoint accepted through aliases", err)
+	}
+}
+
+func TestParseDevicesClassifiesADBMDNSIdentityAsWireless(t *testing.T) {
+	// 场景：ADB 的 _adb-tls-connect mDNS 序列没有冒号，但仍是无线传输，不能被当成 USB 优先。
+	devices := parseDevices("List of devices attached\nadb-16a424c7-X9sGA6._adb-tls-connect._tcp device product:onyx model:25053RT47C\n")
+
+	if len(devices) != 1 || devices[0].Transport != "wireless" {
+		t.Fatalf("devices = %#v, want one wireless mDNS device", devices)
 	}
 }
 
