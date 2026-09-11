@@ -9,3 +9,7 @@ func errUnauthorized() error {
 func errPasswordChangeRequired() error {
 	return apperror.New("AUTH_PASSWORD_CHANGE_REQUIRED", "首次登录必须先修改默认密码", "api.auth", true)
 }
+
+func errForbidden() error {
+	return apperror.New("AUTH_FORBIDDEN", "当前账户无权执行此操作或访问该设备", "api.auth", false)
+}

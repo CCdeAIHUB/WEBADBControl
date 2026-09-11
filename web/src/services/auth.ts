@@ -4,6 +4,9 @@ import { markClientAuthenticated } from '@/services/clientAuthState'
 export interface SessionStatus {
   authenticated: boolean
   mustChangePassword: boolean
+	localBypass?: boolean
+	username?: string
+	role?: 'admin'
 }
 
 export async function getSession(): Promise<SessionStatus> {

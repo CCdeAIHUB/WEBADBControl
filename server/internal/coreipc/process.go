@@ -20,7 +20,15 @@ type ProcessTransport struct {
 }
 
 func StartProcess(ctx context.Context, binary string) (*ProcessTransport, error) {
+	return StartProcessWithEnv(ctx, binary, nil)
+}
+
+func StartProcessWithEnv(ctx context.Context, binary string, environment map[string]string) (*ProcessTransport, error) {
 	command := exec.CommandContext(ctx, binary)
+	command.Env = os.Environ()
+	for key, value := range environment {
+		command.Env = append(command.Env, key+"="+value)
+	}
 	// Core stderr is diagnostic-only; forwarding it keeps IPC stdout strictly JSON Lines while making crashes observable.
 	command.Stderr = os.Stderr
 	stdin, err := command.StdinPipe()

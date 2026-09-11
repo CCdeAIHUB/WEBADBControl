@@ -39,13 +39,13 @@ async function login() {
       <div class="grid size-11 place-items-center rounded-xl bg-brand-600 text-white"><Zap :size="21" /></div>
       <div class="eyebrow mt-6">Secure Access</div>
       <h1 class="mt-2 text-2xl font-bold tracking-tight">登录 ADBControl</h1>
-      <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">输入管理密码建立安全会话。首次登录默认密码为 <span class="font-mono font-semibold text-slate-700 dark:text-slate-200">admin</span>，登录后可在系统设置中修改。</p>
+	  <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">仅可使用 Rust Core 的内置管理员密码登录。初始密码为 <span class="font-mono font-semibold text-slate-700 dark:text-slate-200">admin</span>，首次登录后必须修改。</p>
       <div v-if="serviceUnavailable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">暂时无法读取服务状态，请确认服务正在运行后重试。</div>
-      <label class="mt-6 block text-xs font-medium" for="login-password">管理密码</label>
+      <label class="mt-6 block text-xs font-medium" for="login-password">管理员密码</label>
       <div class="relative mt-2"><KeyRound :size="16" class="absolute top-3 left-3 text-slate-400" /><input id="login-password" v-model="password" type="password" class="field pl-9" autocomplete="current-password" placeholder="输入管理密码" autofocus @keyup.enter="login" /></div>
       <p v-if="error" class="mt-3 text-xs text-red-600" role="alert">{{ error }}</p>
       <button class="btn-primary mt-5 w-full" :disabled="!password || loading" @click="login">{{ loading ? '正在验证…' : '登录管理后台' }}</button>
-      <div class="mt-6 flex items-center gap-2 border-t border-slate-100 pt-5 text-xs text-slate-400 dark:border-white/7"><ShieldCheck :size="15" class="text-brand-600" />密码只在服务端校验，浏览器仅保存 HttpOnly 会话</div>
+	  <div class="mt-6 flex items-center gap-2 border-t border-slate-100 pt-5 text-xs text-slate-400 dark:border-white/7"><ShieldCheck :size="15" class="text-brand-600" />远程用户不能登录此后台；浏览器仅保存 HttpOnly 会话</div>
     </section>
   </main>
 </template>

@@ -4,10 +4,13 @@ pub mod adb;
 pub mod assets;
 pub mod capability;
 pub mod companion;
+pub mod diagnostics;
 pub mod error;
 pub mod ipc;
+pub mod keepalive;
 pub mod platform;
 pub mod protocol;
+pub mod remote;
 
 pub use adb::{AdbCommandOutput, AdbRunner, ProcessAdbRunner};
 pub use assets::{find_adb_asset, load_embedded_manifest, AdbAsset, AdbManifest};
@@ -29,5 +32,16 @@ pub use companion::{
     COMPANION_PROTOCOL_VERSION,
 };
 pub use error::AppError;
+pub use keepalive::{
+    keepalive_check, spawn_adb_keepalive, AdbKeepAliveConfig, AdbKeepAliveHandle,
+    AdbKeepAliveStatus, ADB_KEEPALIVE_MIN_INTERVAL_SECS,
+};
 pub use platform::HostTarget;
 pub use protocol::{CoreService, IpcRequest, IpcResponse};
+#[cfg(feature = "quinn-transport")]
+pub use remote::QuinnRemoteControlServer;
+pub use remote::{
+    LocalAdminService, RemoteAccount, RemoteAccountManager, RemoteControlService, RemoteRequest,
+    RemoteResponse, RemoteRole, DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME, REMOTE_PROTOCOL,
+    REMOTE_PROTOCOL_VERSION,
+};

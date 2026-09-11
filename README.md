@@ -8,7 +8,7 @@ ADBControl Web 是 ADBControl 的独立 Web 版本：保留原 Rust Core、Andro
 Browser (Vue 3 + TypeScript + Tailwind CSS)
     │ HTTP / WebSocket
 Go Web Service
-    ├── Auth / REST / screen gateway / AI proxy
+	├── Administrator session / REST / screen gateway / AI proxy
     ├── SQLite automation runtime
     └── JSON Lines over stdio
 Rust adbcontrol-core
@@ -30,6 +30,8 @@ Go 网络层不会绕过 Core 创建第二套设备协议。ADB 命令仍以 `ar
 - SQLite 自动化任务、JSON DSL、运行状态与控制；
 - OpenAI 兼容多模型、视觉附件与流式 AI 对话；
 - 系统日志、关键操作审计、前端错误上报与 traceId 检索；
+- Core 内置管理员、远程用户、密码轮换与设备级访问授权；
+- Web HTTP 与 Core QUIC 独立监听，远程控制入口默认关闭；
 - 深色/浅色主题、响应式布局、结构化错误与访问鉴权。
 
 完整映射见 [功能对照表](docs/feature-parity.md)。
@@ -57,7 +59,7 @@ pnpm dev
 
 ```bash
 cp .env.example .env
-# 浏览器首次登录默认密码为 admin；登录后请尽快在“设置”中修改
+# Web 管理后台初始管理员密码为 admin；首次登录必须改密
 docker compose up -d --build
 ```
 
@@ -72,7 +74,11 @@ docker compose up -d --build
 - Arch Linux：`pacman`
 - openSUSE：`zypper`
 
-生产环境建议放在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。首次登录默认密码为 `admin`，系统会持续提示修改但不会阻断设备管理；`WEBADB_AUTH_TOKEN` 仅作为脚本/API 客户端的可选兼容令牌。
+Web 管理服务默认只监听 `127.0.0.1:8080`。Core 内置管理员仍使用初始密码 `admin` 时，直接回环访问可进入本机初始化流程；一旦改密，该例外立即失效。任何非回环来源都必须显式使用 Core 管理员密码登录并完成首次改密；Web 后端不保存第二套密码数据库。
+
+管理员可以在“系统设置”中创建或删除远程用户、重置临时密码并分配可访问设备。这些用户仅用于 Core 的加密远程控制协议，不能登录 Web 管理后台。只有当前已连接的设备可以新增授权；重置密码会撤销该用户的旧会话，并要求下次远程登录改密。
+
+“远程控制服务”设置开启的是 Rust Core 的 QUIC/TLS 1.3 UDP 入口，保存后需重启服务；内置管理员不能通过该入口登录。Web HTTP 监听仍由 `WEBADB_ADDRESS` 单独控制，如需从网络访问管理后台，应置于 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `WEBADB_BEHIND_PROXY=true`。`WEBADB_AUTH_TOKEN` 仅作为脚本/API 客户端的可选兼容令牌。
 
 无线配对依赖同时支持 `adb pair` 与 `adb mdns` 的现代 Android Platform-Tools。Docker 构建会下载并验证官方 Linux x86_64 工具；`deploy/install.sh` 也会在启用服务前验证本机架构对应的 ADB，避免旧发行版软件包造成“unknown command mdns/pair”。
 
@@ -93,7 +99,9 @@ CI 还会执行 Rust fmt、clippy、QUIC feature check 与 Docker 构建。
 - 不接受任意主机 Shell 命令；
 - 高风险设备动作使用服务端白名单与前端二次确认；
 - AI API Key 只保存在服务端数据目录；
-- 管理密码使用随机盐派生后持久化，默认密码登录后持续提示修改但不阻断管理流程；
+- 账户密码使用随机盐派生后持久化，改密或管理员重置会撤销该账户的全部旧会话；
+- 本机初始化例外只信任实际 TCP 回环来源、仅在 Core 仍使用初始密码时有效；Web 登录始终拒绝普通远程用户；
+- Core QUIC 远程监听默认关闭，并拒绝内置管理员远程登录；
 - 系统日志仅保存请求摘要、审计字段和脱敏错误详情，不记录密码、令牌、API Key 或上传文件内容；
 - 默认启用同源、CSP、Clickjacking 与 MIME 嗅探防护；
 - 生产数据目录与 `.env` 不进入 Git。

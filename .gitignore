@@ -1,6 +1,9 @@
 # Build outputs
+.tools/
+.tmp-ui-*/
 web/node_modules/
 web/dist/
+server/.cache/
 server/webadbcontrol
 server/webadbcontrol.exe
 core/**/target/

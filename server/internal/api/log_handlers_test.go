@@ -20,7 +20,7 @@ func TestRequestAndAuditLogsArePersisted(t *testing.T) {
 	logs, manager := testLogService(t)
 	server := &Server{config: config.Config{}, auth: manager, logs: logs, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	handler := server.Handler()
-	login := requestJSON(t, handler, http.MethodPost, "/api/v1/session", map[string]string{"password": auth.DefaultPassword}, nil)
+	login := authenticatedLogTestSession(t, handler)
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status = %d body=%s", login.Code, login.Body.String())
 	}
@@ -48,7 +48,7 @@ func TestClientErrorLogCanBeReportedAndQueried(t *testing.T) {
 	logs, manager := testLogService(t)
 	server := &Server{config: config.Config{}, auth: manager, logs: logs, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	handler := server.Handler()
-	login := requestJSON(t, handler, http.MethodPost, "/api/v1/session", map[string]string{"password": auth.DefaultPassword}, nil)
+	login := authenticatedLogTestSession(t, handler)
 	cookie := login.Result().Cookies()[0]
 
 	report := httptest.NewRequest(http.MethodPost, "/api/v1/logs/client-error", bytes.NewBufferString(`{"message":"组件渲染失败","source":"vue","route":"/devices","errorCode":"WEB_RENDER_FAILED","details":{"token":"abc"}}`))
@@ -75,6 +75,37 @@ func TestClientErrorLogCanBeReportedAndQueried(t *testing.T) {
 	}
 }
 
+func TestRemoteUserMutationsAreAudited(t *testing.T) {
+	cases := map[string]string{
+		"/api/v1/users":                   "remote_user.create",
+		"/api/v1/users/operator":          "remote_user.delete",
+		"/api/v1/users/operator/password": "remote_user.reset_password",
+		"/api/v1/users/operator/devices":  "remote_user.assign_device",
+	}
+	for path, expected := range cases {
+		method := http.MethodPut
+		if path == "/api/v1/users" {
+			method = http.MethodPost
+		} else if path == "/api/v1/users/operator" {
+			method = http.MethodDelete
+		}
+		request := httptest.NewRequest(method, path, nil)
+		if !shouldAudit(request) || auditAction(request) != expected {
+			t.Fatalf("audit route %s %s = %q", method, path, auditAction(request))
+		}
+	}
+}
+
+func authenticatedLogTestSession(t *testing.T, handler http.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	const password = "test-admin-password"
+	login := requestJSON(t, handler, http.MethodPost, "/api/v1/session", map[string]string{"username": auth.DefaultAdminUsername, "password": password}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", login.Code, login.Body.String())
+	}
+	return login
+}
+
 func testLogService(t *testing.T) (*observability.Service, *auth.Manager) {
 	t.Helper()
 	repository, err := observability.OpenRepository(filepath.Join(t.TempDir(), "observability.sqlite"))
@@ -82,9 +113,7 @@ func testLogService(t *testing.T) (*observability.Service, *auth.Manager) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repository.Close() })
-	manager, err := auth.Open(filepath.Join(t.TempDir(), "credentials.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager, core := newTestAuthManager()
+	core.password = "test-admin-password"
 	return observability.NewService(repository), manager
 }

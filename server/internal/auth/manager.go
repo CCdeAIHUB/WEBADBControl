@@ -1,219 +1,302 @@
 package auth
 
 import (
-	"crypto/hmac"
+	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
-	"unicode/utf8"
+
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/coreipc"
 )
 
 const (
-	DefaultPassword  = "admin"
-	passwordRounds   = 210_000
-	passwordKeyBytes = 32
-	sessionLifetime  = 24 * time.Hour
+	DefaultAdminUsername = "admin"
+	DefaultPassword      = "admin"
+	sessionLifetime      = 8 * time.Hour
+)
+
+type Role string
+
+const (
+	RoleAdmin Role = "admin"
+	RoleUser  Role = "user"
 )
 
 var (
+	ErrAdminOnly          = errors.New("only the built-in Core administrator may open a Web session")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrTemporarilyLocked  = errors.New("authentication temporarily locked")
-	ErrPasswordTooShort   = errors.New("new password must contain at least 8 characters")
-	ErrPasswordTooLong    = errors.New("new password must contain at most 128 characters")
 	ErrPasswordUnchanged  = errors.New("new password must differ from current password")
 )
 
-type credentialFile struct {
-	Version         int    `json:"version"`
-	Salt            string `json:"salt"`
-	Hash            string `json:"hash"`
-	Iterations      int    `json:"iterations"`
-	PasswordChanged bool   `json:"passwordChanged"`
+type Account struct {
+	Username               string   `json:"username"`
+	Role                   Role     `json:"role"`
+	Devices                []string `json:"devices"`
+	BuiltIn                bool     `json:"builtIn"`
+	PasswordChangeRequired bool     `json:"passwordChangeRequired"`
+}
+
+type Session struct {
+	Username               string `json:"username"`
+	Role                   Role   `json:"role"`
+	PasswordChangeRequired bool   `json:"passwordChangeRequired"`
+	LocalBypass            bool   `json:"localBypass,omitempty"`
+	coreSessionToken       string
+}
+
+type browserSession struct {
+	session   Session
+	expiresAt time.Time
 }
 
 type Manager struct {
 	mu             sync.Mutex
-	path           string
-	credentials    credentialFile
-	sessions       map[string]time.Time
+	core           coreipc.Caller
+	sessions       map[string]browserSession
+	now            func() time.Time
 	failedAttempts int
 	lockedUntil    time.Time
-	now            func() time.Time
+	localBootstrap *Session
 }
 
-func Open(path string) (*Manager, error) {
-	manager := &Manager{path: path, sessions: make(map[string]time.Time), now: time.Now}
-	encoded, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if len(encoded) == 0 {
-		if err := manager.setPasswordLocked(DefaultPassword, false); err != nil {
-			return nil, err
-		}
-		if err := manager.persistLocked(); err != nil {
-			return nil, err
-		}
-		return manager, nil
-	}
-	if err := json.Unmarshal(encoded, &manager.credentials); err != nil {
-		return nil, fmt.Errorf("decode credentials: %w", err)
-	}
-	if manager.credentials.Version != 1 || manager.credentials.Iterations < 100_000 {
-		return nil, errors.New("unsupported credentials format")
-	}
-	if _, err := base64.RawStdEncoding.DecodeString(manager.credentials.Salt); err != nil {
-		return nil, fmt.Errorf("decode credential salt: %w", err)
-	}
-	if _, err := base64.RawStdEncoding.DecodeString(manager.credentials.Hash); err != nil {
-		return nil, fmt.Errorf("decode credential hash: %w", err)
-	}
-	return manager, nil
+func New(core coreipc.Caller) *Manager {
+	return &Manager{core: core, sessions: map[string]browserSession{}, now: time.Now}
 }
 
-func (m *Manager) Login(password string) (string, bool, error) {
+func (m *Manager) Login(ctx context.Context, password string) (string, Session, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := m.now()
-	if now.Before(m.lockedUntil) {
-		return "", m.mustChangePasswordLocked(), ErrTemporarilyLocked
+	if m.now().Before(m.lockedUntil) {
+		m.mu.Unlock()
+		return "", Session{}, ErrTemporarilyLocked
 	}
-	if !m.verifyPasswordLocked(password) {
-		m.failedAttempts++
-		if m.failedAttempts >= 5 {
-			m.failedAttempts = 0
-			m.lockedUntil = now.Add(30 * time.Second)
+	m.mu.Unlock()
+	session, err := m.loginCore(ctx, password)
+	if err != nil {
+		if coreErrorCode(err) == "REMOTE_AUTH_CREDENTIALS_INVALID" {
+			m.mu.Lock()
+			m.failedAttempts++
+			if m.failedAttempts >= 5 {
+				m.failedAttempts = 0
+				m.lockedUntil = m.now().Add(30 * time.Second)
+			}
+			m.mu.Unlock()
+			return "", Session{}, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
 		}
-		return "", m.mustChangePasswordLocked(), ErrInvalidCredentials
+		return "", Session{}, err
 	}
+	if session.Username != DefaultAdminUsername || session.Role != RoleAdmin || session.coreSessionToken == "" {
+		return "", Session{}, ErrAdminOnly
+	}
+	token, err := randomToken(32)
+	if err != nil {
+		return "", Session{}, err
+	}
+	m.mu.Lock()
 	m.failedAttempts = 0
 	m.lockedUntil = time.Time{}
-	token, err := randomToken(32)
-	if err != nil {
-		return "", m.mustChangePasswordLocked(), err
-	}
-	m.cleanupSessionsLocked(now)
-	m.sessions[token] = now.Add(sessionLifetime)
-	return token, m.mustChangePasswordLocked(), nil
+	m.cleanupLocked(m.now())
+	m.sessions[token] = browserSession{session: session, expiresAt: m.now().Add(sessionLifetime)}
+	m.mu.Unlock()
+	return token, session, nil
 }
 
-func (m *Manager) ValidateSession(token string) bool {
+func (m *Manager) Authenticate(token string) (Session, bool) {
 	if token == "" {
-		return false
+		return Session{}, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	expiresAt, ok := m.sessions[token]
-	if !ok || !m.now().Before(expiresAt) {
-		delete(m.sessions, token)
-		return false
-	}
-	return true
+	m.cleanupLocked(m.now())
+	record, ok := m.sessions[token]
+	return record.session, ok
 }
 
-func (m *Manager) Logout(token string) {
+// LocalBootstrapSession grants local management access only while Core still
+// accepts its factory administrator password. Core remains the only password
+// authority; this adapter stores no credential.
+func (m *Manager) LocalBootstrapSession(ctx context.Context) (Session, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var cached Session
+	if m.localBootstrap != nil {
+		cached = *m.localBootstrap
+	}
+	m.mu.Unlock()
+
+	if cached.coreSessionToken != "" {
+		if refreshed, ok := m.refreshCoreSession(ctx, cached.coreSessionToken); ok && refreshed.PasswordChangeRequired {
+			refreshed.LocalBypass = true
+			m.mu.Lock()
+			m.localBootstrap = &refreshed
+			m.mu.Unlock()
+			return refreshed, true
+		}
+		m.mu.Lock()
+		m.localBootstrap = nil
+		m.mu.Unlock()
+	}
+
+	session, err := m.loginCore(ctx, DefaultPassword)
+	if err != nil || session.Username != DefaultAdminUsername || session.Role != RoleAdmin || !session.PasswordChangeRequired {
+		return Session{}, false
+	}
+	session.LocalBypass = true
+	m.mu.Lock()
+	m.localBootstrap = &session
+	m.mu.Unlock()
+	return session, true
+}
+
+func (m *Manager) DefaultPasswordActive(ctx context.Context) bool {
+	_, active := m.LocalBootstrapSession(ctx)
+	return active
+}
+
+func (m *Manager) refreshCoreSession(ctx context.Context, token string) (Session, bool) {
+	var result struct {
+		Username               string `json:"username"`
+		Role                   Role   `json:"role"`
+		PasswordChangeRequired bool   `json:"passwordChangeRequired"`
+	}
+	if err := m.core.Call(ctx, "remote.admin.me", map[string]any{"sessionToken": token}, &result); err != nil {
+		return Session{}, false
+	}
+	if result.Username != DefaultAdminUsername || result.Role != RoleAdmin {
+		return Session{}, false
+	}
+	return Session{Username: result.Username, Role: result.Role, PasswordChangeRequired: result.PasswordChangeRequired, coreSessionToken: token}, true
+}
+
+func (m *Manager) Logout(ctx context.Context, token string) error {
+	m.mu.Lock()
+	record, ok := m.sessions[token]
 	delete(m.sessions, token)
-}
-
-func (m *Manager) MustChangePassword() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.mustChangePasswordLocked()
-}
-
-func (m *Manager) ChangePassword(currentPassword, newPassword string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.verifyPasswordLocked(currentPassword) {
-		return "", ErrInvalidCredentials
-	}
-	length := utf8.RuneCountInString(newPassword)
-	if length < 8 {
-		return "", ErrPasswordTooShort
-	}
-	if length > 128 {
-		return "", ErrPasswordTooLong
-	}
-	if currentPassword == newPassword {
-		return "", ErrPasswordUnchanged
-	}
-	if err := m.setPasswordLocked(newPassword, true); err != nil {
-		return "", err
-	}
-	if err := m.persistLocked(); err != nil {
-		return "", err
-	}
-	clear(m.sessions)
-	token, err := randomToken(32)
-	if err != nil {
-		return "", err
-	}
-	m.sessions[token] = m.now().Add(sessionLifetime)
-	return token, nil
-}
-
-func (m *Manager) mustChangePasswordLocked() bool {
-	return !m.credentials.PasswordChanged
-}
-
-func (m *Manager) verifyPasswordLocked(password string) bool {
-	salt, err := base64.RawStdEncoding.DecodeString(m.credentials.Salt)
-	if err != nil {
-		return false
-	}
-	expected, err := base64.RawStdEncoding.DecodeString(m.credentials.Hash)
-	if err != nil {
-		return false
-	}
-	actual := deriveKey([]byte(password), salt, m.credentials.Iterations, len(expected))
-	return subtle.ConstantTimeCompare(actual, expected) == 1
-}
-
-func (m *Manager) setPasswordLocked(password string, changed bool) error {
-	salt := make([]byte, 24)
-	if _, err := rand.Read(salt); err != nil {
-		return err
-	}
-	hash := deriveKey([]byte(password), salt, passwordRounds, passwordKeyBytes)
-	m.credentials = credentialFile{
-		Version:         1,
-		Salt:            base64.RawStdEncoding.EncodeToString(salt),
-		Hash:            base64.RawStdEncoding.EncodeToString(hash),
-		Iterations:      passwordRounds,
-		PasswordChanged: changed,
+	m.mu.Unlock()
+	if ok {
+		var ignored map[string]any
+		return m.core.Call(ctx, "remote.admin.logout", map[string]any{"sessionToken": record.session.coreSessionToken}, &ignored)
 	}
 	return nil
 }
 
-func (m *Manager) persistLocked() error {
-	encoded, err := json.MarshalIndent(m.credentials, "", "  ")
+func (m *Manager) ChangeAdminPassword(ctx context.Context, session Session, currentPassword, newPassword string) (string, Session, error) {
+	if currentPassword == newPassword {
+		return "", Session{}, ErrPasswordUnchanged
+	}
+	if err := requireAdmin(session); err != nil {
+		return "", Session{}, err
+	}
+	var ignored map[string]any
+	err := m.core.Call(ctx, "remote.admin.changePassword", map[string]any{
+		"sessionToken":    session.coreSessionToken,
+		"currentPassword": currentPassword,
+		"newPassword":     newPassword,
+	}, &ignored)
 	if err != nil {
-		return err
+		if coreErrorCode(err) == "REMOTE_AUTH_CREDENTIALS_INVALID" {
+			return "", Session{}, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
+		}
+		return "", Session{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
-		return err
-	}
-	temporary := m.path + ".tmp"
-	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(temporary, m.path)
+	m.mu.Lock()
+	m.sessions = map[string]browserSession{}
+	m.localBootstrap = nil
+	m.mu.Unlock()
+	return m.Login(ctx, newPassword)
 }
 
-func (m *Manager) cleanupSessionsLocked(now time.Time) {
-	for token, expiresAt := range m.sessions {
-		if !now.Before(expiresAt) {
+func (m *Manager) ListRemoteUsers(ctx context.Context, session Session) ([]Account, error) {
+	if err := requireAdmin(session); err != nil {
+		return nil, err
+	}
+	var accounts []Account
+	err := m.core.Call(ctx, "remote.admin.users.list", adminParams(session, nil), &accounts)
+	if err != nil {
+		return nil, err
+	}
+	users := accounts[:0]
+	for _, account := range accounts {
+		if account.Role == RoleUser && account.Username != DefaultAdminUsername {
+			users = append(users, account)
+		}
+	}
+	return users, nil
+}
+
+func (m *Manager) CreateRemoteUser(ctx context.Context, session Session, username, password string) (Account, error) {
+	if err := requireAdmin(session); err != nil {
+		return Account{}, err
+	}
+	var account Account
+	err := m.core.Call(ctx, "remote.admin.users.create", adminParams(session, map[string]any{"username": username, "password": password}), &account)
+	return account, err
+}
+
+func (m *Manager) DeleteRemoteUser(ctx context.Context, session Session, username string) error {
+	if err := requireAdmin(session); err != nil {
+		return err
+	}
+	var ignored map[string]any
+	return m.core.Call(ctx, "remote.admin.users.delete", adminParams(session, map[string]any{"username": username}), &ignored)
+}
+
+func (m *Manager) ResetRemoteUserPassword(ctx context.Context, session Session, username, newPassword string) error {
+	if err := requireAdmin(session); err != nil {
+		return err
+	}
+	var ignored map[string]any
+	return m.core.Call(ctx, "remote.admin.users.resetPassword", adminParams(session, map[string]any{"username": username, "newPassword": newPassword}), &ignored)
+}
+
+func (m *Manager) SetRemoteUserDevice(ctx context.Context, session Session, username, deviceID string, assigned bool) (Account, error) {
+	if err := requireAdmin(session); err != nil {
+		return Account{}, err
+	}
+	var account Account
+	err := m.core.Call(ctx, "remote.admin.devices.assign", adminParams(session, map[string]any{"username": username, "deviceId": deviceID, "assigned": assigned}), &account)
+	return account, err
+}
+
+func (m *Manager) loginCore(ctx context.Context, password string) (Session, error) {
+	var result struct {
+		SessionToken           string `json:"sessionToken"`
+		Username               string `json:"username"`
+		Role                   Role   `json:"role"`
+		PasswordChangeRequired bool   `json:"passwordChangeRequired"`
+	}
+	if err := m.core.Call(ctx, "remote.admin.login", map[string]any{"password": password}, &result); err != nil {
+		return Session{}, err
+	}
+	return Session{
+		Username:               result.Username,
+		Role:                   result.Role,
+		PasswordChangeRequired: result.PasswordChangeRequired,
+		coreSessionToken:       result.SessionToken,
+	}, nil
+}
+
+func requireAdmin(session Session) error {
+	if session.Username != DefaultAdminUsername || session.Role != RoleAdmin || session.coreSessionToken == "" {
+		return ErrAdminOnly
+	}
+	return nil
+}
+
+func adminParams(session Session, values map[string]any) map[string]any {
+	params := map[string]any{"sessionToken": session.coreSessionToken}
+	for key, value := range values {
+		params[key] = value
+	}
+	return params
+}
+
+func (m *Manager) cleanupLocked(now time.Time) {
+	for token, session := range m.sessions {
+		if !now.Before(session.expiresAt) {
 			delete(m.sessions, token)
 		}
 	}
@@ -227,25 +310,10 @@ func randomToken(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buffer), nil
 }
 
-func deriveKey(password, salt []byte, iterations, keyLength int) []byte {
-	result := make([]byte, 0, keyLength)
-	for block := uint32(1); len(result) < keyLength; block++ {
-		mac := hmac.New(sha256.New, password)
-		_, _ = mac.Write(salt)
-		counter := make([]byte, 4)
-		binary.BigEndian.PutUint32(counter, block)
-		_, _ = mac.Write(counter)
-		u := mac.Sum(nil)
-		t := append([]byte(nil), u...)
-		for round := 1; round < iterations; round++ {
-			mac = hmac.New(sha256.New, password)
-			_, _ = mac.Write(u)
-			u = mac.Sum(nil)
-			for index := range t {
-				t[index] ^= u[index]
-			}
-		}
-		result = append(result, t...)
+func coreErrorCode(err error) string {
+	var appError *apperror.Error
+	if errors.As(err, &appError) {
+		return appError.ErrorCode
 	}
-	return result[:keyLength]
+	return ""
 }

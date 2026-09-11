@@ -24,6 +24,9 @@ type Settings struct {
 	ScreenFPS      int       `json:"screenFps"`
 	AIModels       []AIModel `json:"aiModels"`
 	DefaultModelID string    `json:"defaultModelId,omitempty"`
+	RemoteEnabled  bool      `json:"remoteEnabled"`
+	RemoteAddress  string    `json:"remoteAddress"`
+	RemotePort     int       `json:"remotePort"`
 }
 
 type Store struct {
@@ -33,7 +36,7 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	store := &Store{path: path, data: Settings{Theme: "system", Language: "zh-CN", RefreshSeconds: 5, ScreenFPS: 2}}
+	store := &Store{path: path, data: Settings{Theme: "system", Language: "zh-CN", RefreshSeconds: 5, ScreenFPS: 2, AIModels: []AIModel{}, RemoteAddress: "0.0.0.0", RemotePort: 45921}}
 	encoded, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -43,6 +46,9 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
+	if store.data.AIModels == nil {
+		store.data.AIModels = []AIModel{}
+	}
 	return store, nil
 }
 
@@ -50,7 +56,7 @@ func (s *Store) Get(includeSecrets bool) Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	data := s.data
-	data.AIModels = append([]AIModel(nil), s.data.AIModels...)
+	data.AIModels = append([]AIModel{}, s.data.AIModels...)
 	if !includeSecrets {
 		for index := range data.AIModels {
 			if data.AIModels[index].APIKey != "" {
@@ -67,6 +73,12 @@ func (s *Store) Save(data Settings) error {
 	}
 	if data.ScreenFPS < 1 || data.ScreenFPS > 10 {
 		data.ScreenFPS = 2
+	}
+	if data.RemoteAddress == "" {
+		data.RemoteAddress = "0.0.0.0"
+	}
+	if data.RemotePort < 1024 || data.RemotePort > 65535 {
+		return errors.New("remote port must be between 1024 and 65535")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

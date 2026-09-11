@@ -110,6 +110,17 @@ export interface AppSettings {
   screenFps: number
   aiModels: AIModel[]
   defaultModelId?: string
+	remoteEnabled: boolean
+	remoteAddress: string
+	remotePort: number
+}
+
+export interface RemoteAccount {
+	username: string
+	role: 'user'
+	devices: string[]
+	builtIn: false
+	passwordChangeRequired: boolean
 }
 
 export interface LogEvent {

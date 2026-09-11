@@ -11,7 +11,9 @@ ADBControl Windows 客户端已经围绕 Rust Core、ADB Provider、Android Comp
 3. ADB 设备动作由 Go 映射为参数数组后调用 `adb.exec`，不执行任意主机 Shell。
 4. 浏览器通过同源 HTTP 与 WebSocket 使用设备、任务、AI 和设置能力。
 5. 自动化任务延续版本化 JSON DSL、SQLite 持久化和显式运行状态机。
-6. 浏览器使用密码登录和 HttpOnly 随机会话；默认密码仅用于首次启动，界面持续提示修改但不阻断管理功能，兼容令牌只服务于脚本/API 客户端。
+6. Web 后台只接受 Core 内置管理员身份并使用 HttpOnly 随机会话；仅“实际 TCP 回环来源 + Core 仍使用初始密码”可进入本机初始化流程，其他来源必须显式登录。
+7. 管理员可维护 QUIC 远程用户并按当前已连接设备授权；远程用户不能登录 Web 后台，Core 对设备列表和控制请求执行设备授权。
+8. Web 服务默认绑定回环地址。Core QUIC/TLS 1.3 的 UDP 监听默认关闭，可在设置中显式开启，并在服务重启后生效。
 
 ## 原因
 
@@ -35,4 +37,4 @@ ADBControl Windows 客户端已经围绕 Rust Core、ADB Provider、Android Comp
 
 ## 未来演进
 
-为 Core 增加二进制流 IPC、浏览器 H.264 解码、服务端多用户 RBAC 与审计导出。
+为 Core 增加二进制流 IPC、浏览器 H.264 解码和审计导出。

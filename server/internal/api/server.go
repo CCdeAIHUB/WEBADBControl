@@ -43,6 +43,11 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("POST /api/v1/session", s.createSession)
 	router.HandleFunc("DELETE /api/v1/session", s.deleteSession)
 	router.HandleFunc("PUT /api/v1/password", s.changePassword)
+	router.HandleFunc("GET /api/v1/users", s.listUsers)
+	router.HandleFunc("POST /api/v1/users", s.createUser)
+	router.HandleFunc("DELETE /api/v1/users/{username}", s.deleteUser)
+	router.HandleFunc("PUT /api/v1/users/{username}/password", s.resetUserPassword)
+	router.HandleFunc("PUT /api/v1/users/{username}/devices", s.assignUserDevice)
 	router.HandleFunc("GET /api/v1/overview", s.overview)
 	router.HandleFunc("GET /api/v1/devices", s.listDevices)
 	router.HandleFunc("GET /api/v1/devices/discover", s.discoverDevices)
@@ -101,15 +106,31 @@ func (s *Server) authentication(next http.Handler) http.Handler {
 		}
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 		legacyAuthorized := token != "" && s.validLegacyToken(token)
+		var session auth.Session
 		sessionAuthorized := false
 		if cookie, err := request.Cookie(sessionCookieName); err == nil {
-			sessionAuthorized = s.auth.ValidateSession(cookie.Value)
+			session, sessionAuthorized = s.auth.Authenticate(cookie.Value)
 		}
-		if !legacyAuthorized && !sessionAuthorized {
+		if !sessionAuthorized && isLocalManagementRequest(s.config.Address, request) {
+			session, sessionAuthorized = s.auth.LocalBootstrapSession(request.Context())
+		}
+		if legacyAuthorized {
+			session = auth.Session{Username: "legacy-token", Role: auth.RoleAdmin}
+			sessionAuthorized = true
+		}
+		if !sessionAuthorized {
 			writeError(writer, http.StatusUnauthorized, errUnauthorized())
 			return
 		}
-		next.ServeHTTP(writer, request)
+		if session.PasswordChangeRequired && !session.LocalBypass && request.URL.Path != "/api/v1/password" && request.URL.Path != "/api/v1/session" {
+			writeError(writer, http.StatusForbidden, errPasswordChangeRequired())
+			return
+		}
+		if session.Role != auth.RoleAdmin {
+			writeError(writer, http.StatusForbidden, errForbidden())
+			return
+		}
+		next.ServeHTTP(writer, withSession(request, session))
 	})
 }
 
@@ -236,7 +257,7 @@ func isUnauthenticatedClientLog(path string, status int) bool {
 
 func moduleForPath(path string) string {
 	switch {
-	case strings.Contains(path, "/session") || strings.Contains(path, "/password"):
+	case strings.Contains(path, "/session") || strings.Contains(path, "/password") || strings.Contains(path, "/users"):
 		return "api.auth"
 	case strings.Contains(path, "/devices"):
 		return "device"
@@ -263,6 +284,7 @@ func shouldAudit(request *http.Request) bool {
 	}
 	return strings.Contains(path, "/session") ||
 		strings.Contains(path, "/password") ||
+		strings.Contains(path, "/users") ||
 		strings.Contains(path, "/devices") ||
 		strings.Contains(path, "/automation") ||
 		strings.Contains(path, "/settings") ||
@@ -278,6 +300,14 @@ func auditAction(request *http.Request) string {
 		return "auth.logout"
 	case path == "/api/v1/password":
 		return "auth.change_password"
+	case path == "/api/v1/users" && request.Method == http.MethodPost:
+		return "remote_user.create"
+	case strings.Contains(path, "/users/") && request.Method == http.MethodDelete:
+		return "remote_user.delete"
+	case strings.HasSuffix(path, "/password") && strings.Contains(path, "/users/"):
+		return "remote_user.reset_password"
+	case strings.HasSuffix(path, "/devices") && strings.Contains(path, "/users/"):
+		return "remote_user.assign_device"
 	case strings.Contains(path, "/devices/pair"):
 		return "device.pair"
 	case strings.Contains(path, "/devices/connect"):

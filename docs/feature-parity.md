@@ -16,6 +16,9 @@
 | 手动运行、暂停、继续、停止、运行记录 | 自动化任务 | 显式状态机 + `/automation/runs` |
 | AI 多模型、视觉输入、流式对话 | AI 助手 | 服务端 OpenAI 兼容流代理 |
 | 主题、刷新、模型配置 | 系统设置 | 服务端安全配置存储 |
+| 内置管理员、远程用户与设备授权 | 系统设置 / 远程用户与设备权限 | Web `/users/*` → Core `remote.admin.*` |
+| 默认管理员密码与首次登录强制改密 | 登录 / 修改密码 | `/session`、`/password` → Core `remote.admin.*` |
+| 加密远程控制监听 | 系统设置 / 远程控制服务 | Core QUIC/TLS 1.3 UDP，默认关闭，重启生效 |
 | 请求日志、关键操作审计、前端异常上报 | 系统日志 | `/logs`、`/logs/stats`、`/logs/client-error` |
 | 结构化错误、traceId、恢复建议 | 全局通知与错误状态 | 统一 `AppError` |
 

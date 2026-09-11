@@ -12,7 +12,9 @@ use crate::{
         CompanionRegistry, CompanionSessionManager, DisconnectedCompanionCommandRouter,
     },
     error::AppError,
+    keepalive::{AdbKeepAliveConfig, AdbKeepAliveHandle},
     platform::HostTarget,
+    remote::LocalAdminService,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,12 +81,23 @@ struct DeviceInvokeParams {
     args: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdbKeepAliveConfigureParams {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    interval_secs: Option<u32>,
+}
+
 pub struct CoreService<R: AdbRunner, Q: CompanionCommandRouter = DisconnectedCompanionCommandRouter>
 {
     runner: R,
     manifest: AdbManifest,
     companion_registry: CompanionRegistry,
     companion_router: Q,
+    keepalive: Option<AdbKeepAliveHandle>,
+    local_admin: Option<LocalAdminService>,
 }
 
 impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
@@ -94,6 +107,8 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             manifest,
             companion_registry: CompanionRegistry::default(),
             companion_router: DisconnectedCompanionCommandRouter,
+            keepalive: None,
+            local_admin: None,
         }
     }
 
@@ -107,6 +122,8 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             manifest,
             companion_registry,
             companion_router: DisconnectedCompanionCommandRouter,
+            keepalive: None,
+            local_admin: None,
         }
     }
 }
@@ -123,6 +140,8 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             manifest,
             companion_registry,
             companion_router,
+            keepalive: None,
+            local_admin: None,
         }
     }
 
@@ -137,7 +156,22 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             manifest,
             companion_registry: CompanionRegistry::new(session_manager.devices()),
             companion_router,
+            keepalive: None,
+            local_admin: None,
         }
+    }
+
+    /// 挂载 ADB 保活 supervisor，使 `adb.keepalive.*` IPC 方法可用。
+    pub fn with_keepalive(mut self, handle: AdbKeepAliveHandle) -> Self {
+        self.keepalive = Some(handle);
+        self
+    }
+
+    /// Mounts the local-only administrator adapter used by trusted desktop/Web
+    /// host processes. Remote QUIC clients cannot access this stdio boundary.
+    pub fn with_local_admin(mut self, local_admin: LocalAdminService) -> Self {
+        self.local_admin = Some(local_admin);
+        self
     }
 
     pub fn handle_json_line(&self, line: &str) -> String {
@@ -161,14 +195,46 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             }
         };
 
-        self.handle_request(request)
+        let started = std::time::Instant::now();
+        let method = request.method.clone();
+        let trace = request.id.clone();
+        crate::diagnostics::record("request.start", &method, &trace, true, 0, None);
+        let response = self.handle_request(request);
+        crate::diagnostics::record(
+            "request.end",
+            &method,
+            &trace,
+            response.ok,
+            started.elapsed().as_millis(),
+            response
+                .error
+                .as_ref()
+                .map(|error| error.error_code.as_str()),
+        );
+        response
     }
 
     pub fn handle_request(&self, request: IpcRequest) -> IpcResponse {
+        if request.method.starts_with("remote.admin.") {
+            return match &self.local_admin {
+                Some(local_admin) => local_admin.handle_request(request),
+                None => IpcResponse::failure(
+                    Some(request.id),
+                    AppError::new(
+                        "REMOTE_ADMIN_NOT_CONFIGURED",
+                        "The local remote-administration service is not configured.",
+                        "remote.auth",
+                        true,
+                    ),
+                ),
+            };
+        }
         match request.method.as_str() {
             "core.getHostTarget" => self.handle_get_host_target(request.id),
             "adb.asset.current" => self.handle_get_current_adb_asset(request.id),
             "adb.exec" => self.handle_adb_exec(request),
+            "adb.keepalive.status" => self.handle_adb_keepalive_status(request.id),
+            "adb.keepalive.configure" => self.handle_adb_keepalive_configure(request),
             "companion.protocol.info" => self.handle_companion_protocol_info(request.id),
             "capability.list" => self.handle_capability_list(request.id),
             "device.list" => self.handle_device_list(request.id),
@@ -226,6 +292,69 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
 
         match self.runner.run(&adb_path, &params.args) {
             Ok(output) => response_from_serializable(request.id, &output, "adb.runner"),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
+        }
+    }
+
+    fn handle_adb_keepalive_status(&self, id: String) -> IpcResponse {
+        match &self.keepalive {
+            Some(handle) => response_from_serializable(id, &handle.status(), "adb.keepalive"),
+            None => IpcResponse::failure(
+                Some(id),
+                AppError::new(
+                    "ADB_KEEPALIVE_NOT_STARTED",
+                    "ADB keep-alive supervisor is not running in this Core instance.",
+                    "adb.keepalive",
+                    true,
+                ),
+            ),
+        }
+    }
+
+    fn handle_adb_keepalive_configure(&self, request: IpcRequest) -> IpcResponse {
+        let params: AdbKeepAliveConfigureParams = match parse_ipc_params(
+            request.params,
+            "adb.keepalive.configure params must match { enabled?: boolean, intervalSecs?: number }.",
+        ) {
+            Ok(params) => params,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+
+        let handle = match &self.keepalive {
+            Some(handle) => handle,
+            None => {
+                return IpcResponse::failure(
+                    Some(request.id),
+                    AppError::new(
+                        "ADB_KEEPALIVE_NOT_STARTED",
+                        "ADB keep-alive supervisor is not running in this Core instance.",
+                        "adb.keepalive",
+                        true,
+                    ),
+                )
+            }
+        };
+
+        if params.enabled.is_none() && params.interval_secs.is_none() {
+            return IpcResponse::failure(
+                Some(request.id),
+                AppError::new(
+                    "IPC_PARAMS_INVALID",
+                    "adb.keepalive.configure requires at least one of enabled / intervalSecs.",
+                    "ipc.protocol",
+                    false,
+                ),
+            );
+        }
+
+        let current = handle.status();
+        let merged = AdbKeepAliveConfig {
+            enabled: params.enabled.unwrap_or(current.enabled),
+            interval_secs: params.interval_secs.unwrap_or(current.interval_secs),
+        };
+
+        match handle.configure(merged) {
+            Ok(()) => response_from_serializable(request.id, &handle.status(), "adb.keepalive"),
             Err(error) => IpcResponse::failure(Some(request.id), error),
         }
     }
@@ -637,6 +766,32 @@ mod tests {
     }
 
     #[test]
+    fn local_admin_methods_are_dispatched_through_stdio_ipc() {
+        // Scenario: the trusted Web host must authenticate against the same
+        // Core administrator database used by remote-user management.
+        let path = std::env::temp_dir().join(format!(
+            "adbcontrol-protocol-local-admin-{}.json",
+            rand::random::<u64>()
+        ));
+        let accounts = Arc::new(
+            crate::remote::RemoteAccountManager::load_or_initialize(&path)
+                .expect("account database should initialize"),
+        );
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_local_admin(crate::remote::LocalAdminService::new(accounts));
+
+        let encoded = service.handle_json_line(
+            r#"{"id":"admin-login","method":"remote.admin.login","params":{"password":"admin"}}"#,
+        );
+        let response: IpcResponse =
+            serde_json::from_str(&encoded).expect("response should be valid JSON");
+
+        assert!(response.ok);
+        assert_eq!(response.result.unwrap()["role"], "admin");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn adb_exec_preserves_args_and_returns_command_output() {
         // 场景：前端请求 adb.exec 时，核心只把参数数组交给 ADB runner，不拼接命令文本。
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -666,6 +821,128 @@ mod tests {
 
         let encoded = service
             .handle_json_line(r#"{"id":"3","method":"adb.exec","params":{"args":"devices"}}"#);
+        let response: IpcResponse =
+            serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.expect("error is required").error_code,
+            "IPC_PARAMS_INVALID"
+        );
+    }
+
+    #[test]
+    fn adb_keepalive_status_reports_running_supervisor() {
+        // 场景：Core 挂载保活 supervisor 后，前端必须能读取实时保活状态。
+        let keepalive = crate::keepalive::spawn_adb_keepalive(
+            RecordingRunner {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+            load_embedded_manifest().expect("embedded manifest must be valid"),
+            crate::keepalive::AdbKeepAliveConfig::default(),
+        )
+        .expect("keepalive thread should spawn");
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_keepalive(keepalive);
+
+        let encoded = service
+            .handle_json_line(r#"{"id":"ka-1","method":"adb.keepalive.status","params":{}}"#);
+        let response: IpcResponse =
+            serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
+        let result = response.result.expect("result is required");
+
+        assert!(response.ok);
+        assert_eq!(result["enabled"], true);
+        assert_eq!(result["running"], true);
+        assert_eq!(result["intervalSecs"], 30);
+    }
+
+    #[test]
+    fn adb_keepalive_status_fails_when_supervisor_not_started() {
+        // 场景：Core 未挂载保活 supervisor 时必须显式失败，不能伪造状态。
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())));
+
+        let encoded = service
+            .handle_json_line(r#"{"id":"ka-2","method":"adb.keepalive.status","params":{}}"#);
+        let response: IpcResponse =
+            serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.expect("error is required").error_code,
+            "ADB_KEEPALIVE_NOT_STARTED"
+        );
+    }
+
+    #[test]
+    fn adb_keepalive_configure_updates_config() {
+        // 场景：前端必须能在运行时关闭/调整保活间隔，并拿到更新后的状态。
+        let keepalive = crate::keepalive::spawn_adb_keepalive(
+            RecordingRunner {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+            load_embedded_manifest().expect("embedded manifest must be valid"),
+            crate::keepalive::AdbKeepAliveConfig::default(),
+        )
+        .expect("keepalive thread should spawn");
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_keepalive(keepalive);
+
+        let encoded = service.handle_json_line(
+            r#"{"id":"ka-3","method":"adb.keepalive.configure","params":{"enabled":false,"intervalSecs":60}}"#,
+        );
+        let response: IpcResponse =
+            serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
+        let result = response.result.expect("result is required");
+
+        assert!(response.ok);
+        assert_eq!(result["enabled"], false);
+        assert_eq!(result["intervalSecs"], 60);
+    }
+
+    #[test]
+    fn adb_keepalive_configure_rejects_interval_below_minimum() {
+        // 场景：小于最小间隔的配置必须被拒绝，错误码指向 adb.keepalive 模块。
+        let keepalive = crate::keepalive::spawn_adb_keepalive(
+            RecordingRunner {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+            load_embedded_manifest().expect("embedded manifest must be valid"),
+            crate::keepalive::AdbKeepAliveConfig::default(),
+        )
+        .expect("keepalive thread should spawn");
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_keepalive(keepalive);
+
+        let encoded = service.handle_json_line(
+            r#"{"id":"ka-4","method":"adb.keepalive.configure","params":{"intervalSecs":1}}"#,
+        );
+        let response: IpcResponse =
+            serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.expect("error is required").error_code,
+            "ADB_KEEPALIVE_INTERVAL_INVALID"
+        );
+    }
+
+    #[test]
+    fn adb_keepalive_configure_requires_at_least_one_field() {
+        // 场景：空参数的 configure 是契约错误，必须显式失败。
+        let keepalive = crate::keepalive::spawn_adb_keepalive(
+            RecordingRunner {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+            load_embedded_manifest().expect("embedded manifest must be valid"),
+            crate::keepalive::AdbKeepAliveConfig::default(),
+        )
+        .expect("keepalive thread should spawn");
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_keepalive(keepalive);
+
+        let encoded = service
+            .handle_json_line(r#"{"id":"ka-5","method":"adb.keepalive.configure","params":{}}"#);
         let response: IpcResponse =
             serde_json::from_str(encoded.as_str()).expect("response should be valid JSON");
 

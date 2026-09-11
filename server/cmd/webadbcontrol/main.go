@@ -32,7 +32,14 @@ func main() {
 	}
 	processContext, cancelProcess := context.WithCancel(context.Background())
 	defer cancelProcess()
-	transport, err := coreipc.StartProcess(processContext, applicationConfig.CoreBinary)
+	transport, err := coreipc.StartProcessWithEnv(
+		processContext,
+		applicationConfig.CoreBinary,
+		map[string]string{
+			"ADBCONTROL_REMOTE_DATA_DIR": applicationConfig.CoreRemoteDataDir,
+			"ADBCONTROL_REMOTE_LISTEN":   applicationConfig.CoreRemoteListen,
+		},
+	)
 	if err != nil {
 		logger.Error("core_start_failed", "error", err)
 		os.Exit(1)
@@ -74,11 +81,7 @@ func main() {
 		logger.Error("settings_open_failed", "error", err)
 		os.Exit(1)
 	}
-	authenticator, err := auth.Open(filepath.Join(applicationConfig.DataDir, "credentials.json"))
-	if err != nil {
-		logger.Error("credentials_open_failed", "error", err)
-		os.Exit(1)
-	}
+	authenticator := auth.New(core)
 	handler := api.New(applicationConfig, devices, automationService, settingsStore, ai.NewService(settingsStore), authenticator, logService, logger).Handler()
 	httpServer := &http.Server{Addr: applicationConfig.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 
