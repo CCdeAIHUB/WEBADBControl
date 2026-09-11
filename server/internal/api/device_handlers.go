@@ -78,11 +78,14 @@ func (s *Server) deviceAction(writer http.ResponseWriter, request *http.Request)
 	}
 	ctx, cancel := withTimeout(request, 5*time.Second)
 	defer cancel()
-	if err := s.devices.Action(ctx, request.PathValue("id"), body); err != nil {
+	outcome, err := s.devices.ActionWithOutcome(ctx, request.PathValue("id"), body)
+	if err != nil {
+		s.logger.Warn("device_action_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "actionType", body.Type, "key", body.Key, "transport", outcome.Transport, "error", err)
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	writeData(writer, http.StatusOK, map[string]bool{"accepted": true})
+	s.logger.Info("device_action_completed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "actionType", body.Type, "key", body.Key, "transport", outcome.Transport)
+	writeData(writer, http.StatusOK, map[string]any{"accepted": true, "transport": outcome.Transport})
 }
 
 func (s *Server) screenshot(writer http.ResponseWriter, request *http.Request) {

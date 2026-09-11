@@ -25,30 +25,30 @@ func isInputInjectionDenied(err error) bool {
 	return strings.Contains(detail, "injecting input events") && strings.Contains(detail, "inject_events")
 }
 
-func (s *Service) fallbackDeniedInput(ctx context.Context, deviceID string, request ActionRequest) error {
+func (s *Service) fallbackDeniedInput(ctx context.Context, deviceID string, request ActionRequest) (string, error) {
 	if request.Type == "key" && request.Key == "HOME" {
 		_, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "am", "start", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME"))
-		return err
+		return "android-home-intent", err
 	}
 
 	operation, args, ok := accessibilityFallback(request)
 	if !ok {
-		return inputPermissionError()
+		return "unsupported", inputPermissionError()
 	}
 	statusPayload, err := s.ExecuteCompanionCommand(ctx, deviceID, "android.accessibility.control", "accessibility.status", map[string]any{})
 	if err != nil {
-		return err
+		return "companion-accessibility", err
 	}
 	var status companionAccessibilityStatus
 	if err := json.Unmarshal([]byte(statusPayload), &status); err != nil {
-		return apperror.Wrap("COMPANION_RESULT_INVALID", "伴侣无障碍状态无法解析", "device.control", true, err)
+		return "companion-accessibility", apperror.Wrap("COMPANION_RESULT_INVALID", "伴侣无障碍状态无法解析", "device.control", true, err)
 	}
 	if !status.OK || !status.Result.Enabled {
-		return apperror.New("COMPANION_ACCESSIBILITY_NOT_ENABLED", "设备禁止 ADB 控制，且伴侣无障碍尚未启用", "device.control", true).
+		return "companion-accessibility", apperror.New("COMPANION_ACCESSIBILITY_NOT_ENABLED", "设备禁止 ADB 控制，且伴侣无障碍尚未启用", "device.control", true).
 			WithSuggestion("请在设备的无障碍设置中启用 ADBControl 伴侣；部分三星/小米设备也可启用“USB 调试（安全设置）”")
 	}
 	_, err = s.ExecuteCompanionCommand(ctx, deviceID, "android.accessibility.control", operation, args)
-	return err
+	return "companion-accessibility", err
 }
 
 func accessibilityFallback(request ActionRequest) (string, map[string]any, bool) {

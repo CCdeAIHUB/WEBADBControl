@@ -265,16 +265,26 @@ func (s *Service) Connect(ctx context.Context, endpoint string) error {
 		WithSuggestion("请确认设备使用的是无线调试页面中的连接端口，而不是六位码配对端口")
 }
 
+type ActionOutcome struct {
+	Transport string `json:"transport"`
+}
+
 func (s *Service) Action(ctx context.Context, deviceID string, request ActionRequest) error {
+	_, err := s.ActionWithOutcome(ctx, deviceID, request)
+	return err
+}
+
+func (s *Service) ActionWithOutcome(ctx context.Context, deviceID string, request ActionRequest) (ActionOutcome, error) {
 	args, err := ActionArguments(deviceID, request)
 	if err != nil {
-		return apperror.Wrap("DEVICE_ACTION_INVALID", "设备操作参数无效", "device.control", false, err)
+		return ActionOutcome{}, apperror.Wrap("DEVICE_ACTION_INVALID", "设备操作参数无效", "device.control", false, err)
 	}
 	_, err = s.Exec(ctx, args)
 	if err == nil || !isInputInjectionDenied(err) {
-		return err
+		return ActionOutcome{Transport: "adb-input"}, err
 	}
-	return s.fallbackDeniedInput(ctx, deviceID, request)
+	transport, fallbackErr := s.fallbackDeniedInput(ctx, deviceID, request)
+	return ActionOutcome{Transport: transport}, fallbackErr
 }
 
 func (s *Service) Screenshot(ctx context.Context, deviceID string) ([]byte, error) {
