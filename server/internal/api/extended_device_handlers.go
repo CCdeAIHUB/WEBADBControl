@@ -4,6 +4,33 @@ import (
 	"net/http"
 )
 
+func (s *Server) createQRPairing(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.devices.CreateWirelessPairingQR(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writeData(writer, http.StatusCreated, result)
+}
+
+func (s *Server) pairQRDevice(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.devices.PairWirelessQR(request.Context(), request.PathValue("sessionId"))
+	if err != nil {
+		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
+		return
+	}
+	s.logger.Info("wireless_qr_pairing_completed", "traceId", writer.Header().Get("X-Request-ID"), "serviceName", result.ServiceName, "endpoint", result.Endpoint)
+	writeData(writer, http.StatusOK, result)
+}
+
+func (s *Server) cancelQRPairing(writer http.ResponseWriter, request *http.Request) {
+	if err := s.devices.CancelWirelessQR(request.Context(), request.PathValue("sessionId")); err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writeData(writer, http.StatusOK, map[string]bool{"cancelled": true})
+}
+
 func (s *Server) discoverDevices(writer http.ResponseWriter, request *http.Request) {
 	services, err := s.devices.Discover(request.Context())
 	if err != nil {

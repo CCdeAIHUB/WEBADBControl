@@ -11,6 +11,7 @@ pub mod keepalive;
 pub mod platform;
 pub mod protocol;
 pub mod remote;
+pub mod wireless;
 
 pub use adb::{AdbCommandOutput, AdbRunner, ProcessAdbRunner};
 pub use assets::{find_adb_asset, load_embedded_manifest, AdbAsset, AdbManifest};
@@ -45,3 +46,4 @@ pub use remote::{
     RemoteResponse, RemoteRole, DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME, REMOTE_PROTOCOL,
     REMOTE_PROTOCOL_VERSION,
 };
+pub use wireless::{WirelessPairingManager, WirelessPairingQr, WirelessPairingResult};

@@ -15,6 +15,7 @@ use crate::{
     keepalive::{AdbKeepAliveConfig, AdbKeepAliveHandle},
     platform::HostTarget,
     remote::LocalAdminService,
+    wireless::WirelessPairingManager,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +91,13 @@ struct AdbKeepAliveConfigureParams {
     interval_secs: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QrPairingSessionParams {
+    #[serde(default)]
+    session_id: String,
+}
+
 pub struct CoreService<R: AdbRunner, Q: CompanionCommandRouter = DisconnectedCompanionCommandRouter>
 {
     runner: R,
@@ -97,6 +105,7 @@ pub struct CoreService<R: AdbRunner, Q: CompanionCommandRouter = DisconnectedCom
     companion_registry: CompanionRegistry,
     companion_router: Q,
     keepalive: Option<AdbKeepAliveHandle>,
+    wireless_pairing: WirelessPairingManager,
     local_admin: Option<LocalAdminService>,
 }
 
@@ -108,6 +117,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             companion_registry: CompanionRegistry::default(),
             companion_router: DisconnectedCompanionCommandRouter,
             keepalive: None,
+            wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
         }
     }
@@ -123,6 +133,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             companion_registry,
             companion_router: DisconnectedCompanionCommandRouter,
             keepalive: None,
+            wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
         }
     }
@@ -141,6 +152,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             companion_registry,
             companion_router,
             keepalive: None,
+            wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
         }
     }
@@ -157,6 +169,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             companion_registry: CompanionRegistry::new(session_manager.devices()),
             companion_router,
             keepalive: None,
+            wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
         }
     }
@@ -235,6 +248,9 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             "adb.exec" => self.handle_adb_exec(request),
             "adb.keepalive.status" => self.handle_adb_keepalive_status(request.id),
             "adb.keepalive.configure" => self.handle_adb_keepalive_configure(request),
+            "adb.wifi.qr.create" => self.handle_adb_wifi_qr_create(request.id),
+            "adb.wifi.qr.pair" => self.handle_adb_wifi_qr_pair(request),
+            "adb.wifi.qr.cancel" => self.handle_adb_wifi_qr_cancel(request),
             "companion.protocol.info" => self.handle_companion_protocol_info(request.id),
             "capability.list" => self.handle_capability_list(request.id),
             "device.list" => self.handle_device_list(request.id),
@@ -355,6 +371,51 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
 
         match handle.configure(merged) {
             Ok(()) => response_from_serializable(request.id, &handle.status(), "adb.keepalive"),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
+        }
+    }
+
+    fn handle_adb_wifi_qr_create(&self, id: String) -> IpcResponse {
+        match self.wireless_pairing.create_qr() {
+            Ok(qr) => response_from_serializable(id, &qr, "adb.wifi.qr"),
+            Err(error) => IpcResponse::failure(Some(id), error),
+        }
+    }
+
+    fn handle_adb_wifi_qr_pair(&self, request: IpcRequest) -> IpcResponse {
+        let params: QrPairingSessionParams = match parse_ipc_params(
+            request.params,
+            "adb.wifi.qr.pair params must match { sessionId: string }.",
+        ) {
+            Ok(params) => params,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        if let Err(error) = require_non_empty(&params.session_id, "sessionId") {
+            return IpcResponse::failure(Some(request.id), error);
+        }
+        let adb_path = match self.resolve_current_adb_path() {
+            Ok(path) => path,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        match self.wireless_pairing.pair(&params.session_id, &self.runner, &adb_path) {
+            Ok(result) => response_from_serializable(request.id, &result, "adb.wifi.qr"),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
+        }
+    }
+
+    fn handle_adb_wifi_qr_cancel(&self, request: IpcRequest) -> IpcResponse {
+        let params: QrPairingSessionParams = match parse_ipc_params(
+            request.params,
+            "adb.wifi.qr.cancel params must match { sessionId: string }.",
+        ) {
+            Ok(params) => params,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        if let Err(error) = require_non_empty(&params.session_id, "sessionId") {
+            return IpcResponse::failure(Some(request.id), error);
+        }
+        match self.wireless_pairing.cancel(&params.session_id) {
+            Ok(()) => IpcResponse::success(request.id, json!({"cancelled": true})),
             Err(error) => IpcResponse::failure(Some(request.id), error),
         }
     }

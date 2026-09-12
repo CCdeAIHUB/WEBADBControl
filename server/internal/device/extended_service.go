@@ -9,6 +9,48 @@ import (
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 )
 
+// WirelessPairingQR intentionally exposes only the renderable QR and opaque session id.
+// The pairing password never leaves Rust Core memory.
+type WirelessPairingQR struct {
+	SessionID   string `json:"sessionId"`
+	ServiceName string `json:"serviceName"`
+	QRSVG       string `json:"qrSvg"`
+	MimeType    string `json:"mimeType"`
+	ExpiresAt   uint64 `json:"expiresAt"`
+}
+
+type WirelessQRPairingResult struct {
+	Paired      bool   `json:"paired"`
+	ServiceName string `json:"serviceName"`
+	Endpoint    string `json:"endpoint"`
+}
+
+func (s *Service) CreateWirelessPairingQR(ctx context.Context) (WirelessPairingQR, error) {
+	var result WirelessPairingQR
+	if err := s.core.Call(ctx, "adb.wifi.qr.create", map[string]any{}, &result); err != nil {
+		return WirelessPairingQR{}, err
+	}
+	return result, nil
+}
+
+func (s *Service) PairWirelessQR(ctx context.Context, sessionID string) (WirelessQRPairingResult, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return WirelessQRPairingResult{}, apperror.New("ADB_QR_PAIRING_SESSION_INVALID", "二维码配对会话无效", "adb.wifi.qr", true)
+	}
+	var result WirelessQRPairingResult
+	if err := s.core.Call(ctx, "adb.wifi.qr.pair", map[string]any{"sessionId": sessionID}, &result); err != nil {
+		return WirelessQRPairingResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Service) CancelWirelessQR(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return apperror.New("ADB_QR_PAIRING_SESSION_INVALID", "二维码配对会话无效", "adb.wifi.qr", true)
+	}
+	return s.core.Call(ctx, "adb.wifi.qr.cancel", map[string]any{"sessionId": sessionID}, nil)
+}
+
 func (s *Service) Pair(ctx context.Context, endpoint, code string) error {
 	normalizedEndpoint, err := normalizeWirelessEndpoint(endpoint)
 	if err != nil {

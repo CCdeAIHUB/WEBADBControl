@@ -11,6 +11,18 @@ export interface PairingResult {
   endpoint: string
 }
 
+export interface QRPairingSession {
+  sessionId: string
+  serviceName: string
+  qrSvg: string
+  mimeType: 'image/svg+xml'
+  expiresAt: number
+}
+
+export interface QRPairingResult extends PairingResult {
+  serviceName: string
+}
+
 export function normalizePairingCode(value: string): string {
   return value.replace(/\D/g, '').slice(0, 6)
 }
@@ -24,4 +36,16 @@ export function pairWirelessDevice(endpoint: string, code: string): Promise<Pair
     method: 'POST',
     body: JSON.stringify({ endpoint: endpoint.trim(), code: code.trim() }),
   })
+}
+
+export function createQRPairing(): Promise<QRPairingSession> {
+  return api('/devices/qr-pairings', { method: 'POST' })
+}
+
+export function pairQRDevice(sessionId: string): Promise<QRPairingResult> {
+  return api(`/devices/qr-pairings/${encodeURIComponent(sessionId)}/pair`, { method: 'POST' })
+}
+
+export function cancelQRPairing(sessionId: string): Promise<{ cancelled: boolean }> {
+  return api(`/devices/qr-pairings/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
