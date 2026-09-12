@@ -40,7 +40,7 @@ func TestQRPairingHandlersUseOpaqueCoreSession(t *testing.T) {
 	// 场景：Web 只能传递 Core 生成的会话 ID，二维码秘密不得进入 HTTP 响应或请求参数。
 	caller := &apiQRCaller{}
 	server := &Server{devices: device.NewService(caller), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/devices/qr-pairings", nil)
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/wireless/qr-pairings", nil)
 	createResponse := httptest.NewRecorder()
 	server.createQRPairing(createResponse, createRequest)
 	if createResponse.Code != http.StatusCreated || caller.method != "adb.wifi.qr.create" {
@@ -50,7 +50,7 @@ func TestQRPairingHandlersUseOpaqueCoreSession(t *testing.T) {
 		t.Fatalf("QR response leaked a password: %s", createResponse.Body.String())
 	}
 
-	pairRequest := httptest.NewRequest(http.MethodPost, "/api/v1/devices/qr-pairings/qr-session/pair", nil)
+	pairRequest := httptest.NewRequest(http.MethodPost, "/api/v1/wireless/qr-pairings/qr-session/pair", nil)
 	pairRequest.SetPathValue("sessionId", "qr-session")
 	pairResponse := httptest.NewRecorder()
 	server.pairQRDevice(pairResponse, pairRequest)

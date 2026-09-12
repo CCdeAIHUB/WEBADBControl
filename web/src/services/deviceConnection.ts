@@ -39,13 +39,13 @@ export function pairWirelessDevice(endpoint: string, code: string): Promise<Pair
 }
 
 export function createQRPairing(): Promise<QRPairingSession> {
-  return api('/devices/qr-pairings', { method: 'POST' })
+  return api('/wireless/qr-pairings', { method: 'POST' })
 }
 
 export function pairQRDevice(sessionId: string): Promise<QRPairingResult> {
-  return api(`/devices/qr-pairings/${encodeURIComponent(sessionId)}/pair`, { method: 'POST' })
+  return api(`/wireless/qr-pairings/${encodeURIComponent(sessionId)}/pair`, { method: 'POST' })
 }
 
 export function cancelQRPairing(sessionId: string): Promise<{ cancelled: boolean }> {
-  return api(`/devices/qr-pairings/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  return api(`/wireless/qr-pairings/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }

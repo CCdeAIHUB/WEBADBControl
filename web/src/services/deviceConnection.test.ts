@@ -33,8 +33,8 @@ describe('wireless ADB pairing', () => {
     await createQRPairing()
     await pairQRDevice('qr-1')
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/devices/qr-pairings', expect.objectContaining({ method: 'POST' }))
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/devices/qr-pairings/qr-1/pair', expect.objectContaining({ method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/wireless/qr-pairings', expect.objectContaining({ method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/wireless/qr-pairings/qr-1/pair', expect.objectContaining({ method: 'POST' }))
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('password')
   })
 })
