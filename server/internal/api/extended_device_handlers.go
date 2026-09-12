@@ -63,6 +63,17 @@ func (s *Server) disconnectDevice(writer http.ResponseWriter, request *http.Requ
 	writeData(writer, http.StatusOK, map[string]bool{"disconnected": true})
 }
 
+func (s *Server) removeDevice(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.devices.Remove(request.Context(), request.PathValue("id"))
+	if err != nil {
+		s.logger.Warn("device_remove_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "disconnected", result.Disconnected, "error", err)
+		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
+		return
+	}
+	s.logger.Info("device_removed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "disconnected", result.Disconnected)
+	writeData(writer, http.StatusOK, result)
+}
+
 func (s *Server) enableDeviceTCPIP(writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Port int `json:"port"`

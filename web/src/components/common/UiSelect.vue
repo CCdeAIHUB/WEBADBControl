@@ -9,7 +9,7 @@ const model = defineModel<string | undefined>()
   <div class="relative">
     <select
       v-model="model"
-      class="field appearance-none pr-9"
+      class="field appearance-none pr-9 [color-scheme:light] dark:[color-scheme:dark]"
       :disabled="disabled"
       :aria-label="ariaLabel"
     >

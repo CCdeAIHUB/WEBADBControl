@@ -32,5 +32,9 @@ export const useDevicesStore = defineStore('devices', {
       await api('/devices/connect', { method: 'POST', body: JSON.stringify({ endpoint }) })
       await this.refresh()
     },
+    async remove(device: Device) {
+      await api(`/devices/${encodeURIComponent(device.id)}/remove`, { method: 'POST', body: '{}' })
+      await this.refresh()
+    },
   },
 })

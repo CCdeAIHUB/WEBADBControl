@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("GET /api/v1/devices/{id}/lock", s.deviceLockState)
 	router.HandleFunc("POST /api/v1/devices/{id}/unlock", s.unlockDevice)
 	router.HandleFunc("POST /api/v1/devices/{id}/disconnect", s.disconnectDevice)
+	router.HandleFunc("POST /api/v1/devices/{id}/remove", s.removeDevice)
 	router.HandleFunc("POST /api/v1/devices/{id}/tcpip", s.enableDeviceTCPIP)
 	router.HandleFunc("POST /api/v1/devices/{id}/keepalive", s.keepAliveDevice)
 	router.HandleFunc("POST /api/v1/devices/{id}/actions", s.deviceAction)

@@ -53,6 +53,11 @@ select::-ms-expand { display: none; }
   .field {
     @apply h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-500 hover:border-slate-300 focus:border-brand-500 focus:ring-3 focus:ring-brand-500/12 dark:border-white/10 dark:bg-white/5 dark:text-slate-100 dark:placeholder:text-slate-400;
   }
+  /* Native select menus are rendered by the browser, so color-scheme is needed
+     in addition to Tailwind colors to prevent a white popup with light text. */
+  .field option {
+    @apply bg-white text-slate-800 dark:bg-[#18211d] dark:text-slate-100;
+  }
   .btn {
     @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-brand-500/25 disabled:opacity-45;
   }

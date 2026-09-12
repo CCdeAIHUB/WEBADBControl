@@ -117,6 +117,11 @@ func sanitizeHardwareID(value string) string {
 }
 
 func fallbackHardwareID(device Device) string {
+	if serviceID := normalizedMDNSServiceIdentity(device.ID); serviceID != "" {
+		// ADB resolves a duplicate mDNS service name by appending " (n)" to the
+		// serial. That suffix is a local collision marker, not a second handset.
+		return "mdns:" + serviceID
+	}
 	if device.Model != "" && device.Product != "" && device.Transport == "wireless" {
 		return "wireless:" + device.Product + ":" + device.Model
 	}
@@ -199,11 +204,16 @@ func parseDevices(output string) []Device {
 		if len(fields) < 2 || fields[0] == "List" {
 			continue
 		}
-		device := Device{ID: fields[0], Name: fields[0], State: fields[1], Transport: "usb"}
+		stateIndex, stateWidth := adbDeviceStateIndex(fields)
+		if stateIndex <= 0 {
+			continue
+		}
+		deviceID := strings.Join(fields[:stateIndex], " ")
+		device := Device{ID: deviceID, Name: deviceID, State: strings.Join(fields[stateIndex : stateIndex+stateWidth], " "), Transport: "usb"}
 		if isWirelessADBIdentity(device.ID) {
 			device.Transport = "wireless"
 		}
-		for _, field := range fields[2:] {
+		for _, field := range fields[stateIndex+stateWidth:] {
 			key, value, ok := strings.Cut(field, ":")
 			if !ok {
 				continue
@@ -220,10 +230,48 @@ func parseDevices(output string) []Device {
 	return devices
 }
 
+func adbDeviceStateIndex(fields []string) (int, int) {
+	for index, field := range fields {
+		switch field {
+		case "device", "offline", "unauthorized":
+			return index, 1
+		case "no":
+			if index+1 < len(fields) && fields[index+1] == "permissions" {
+				return index, 2
+			}
+		}
+	}
+	return -1, 0
+}
+
 func isWirelessADBIdentity(deviceID string) bool {
 	return strings.Contains(deviceID, ":") ||
 		strings.Contains(deviceID, "._adb-tls-connect._tcp") ||
 		strings.Contains(deviceID, "._adb._tcp")
+}
+
+func normalizedMDNSServiceIdentity(deviceID string) string {
+	const suffix = "._adb-tls-connect._tcp"
+	serviceName, found := strings.CutSuffix(deviceID, suffix)
+	if !found {
+		return ""
+	}
+	if opening := strings.LastIndex(serviceName, " ("); opening >= 0 && strings.HasSuffix(serviceName, ")") {
+		instance := serviceName[opening+2 : len(serviceName)-1]
+		if instance != "" {
+			allDigits := true
+			for _, character := range instance {
+				if character < '0' || character > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				serviceName = serviceName[:opening]
+			}
+		}
+	}
+	return serviceName
 }
 
 func isOnlineEndpoint(candidate Device, endpoint string) bool {

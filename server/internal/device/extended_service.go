@@ -69,6 +69,41 @@ func (s *Service) Disconnect(ctx context.Context, deviceID string) error {
 	return err
 }
 
+type RemovalResult struct {
+	Disconnected []string `json:"disconnected"`
+}
+
+func (s *Service) Remove(ctx context.Context, deviceID string) (RemovalResult, error) {
+	devices, err := s.List(ctx)
+	if err != nil {
+		return RemovalResult{}, err
+	}
+	connectionIDs := []string{deviceID}
+	for _, candidate := range devices {
+		if candidate.ID == deviceID || containsDeviceID(candidate.Aliases, deviceID) {
+			connectionIDs = appendUnique([]string{candidate.ID}, candidate.Aliases...)
+			break
+		}
+	}
+	result := RemovalResult{}
+	for _, connectionID := range appendUnique(nil, connectionIDs...) {
+		if err := s.Disconnect(ctx, connectionID); err != nil {
+			return result, err
+		}
+		result.Disconnected = append(result.Disconnected, connectionID)
+	}
+	return result, nil
+}
+
+func containsDeviceID(deviceIDs []string, target string) bool {
+	for _, deviceID := range deviceIDs {
+		if deviceID == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) EnableTCPIP(ctx context.Context, deviceID string, port int) error {
 	if port < 1024 || port > 65535 {
 		return apperror.New("ADB_TCPIP_PORT_INVALID", "TCP/IP 端口必须在 1024 到 65535 之间", "device.connection", true)

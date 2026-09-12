@@ -141,6 +141,32 @@ func TestKeepAliveRejectsUSBDevice(t *testing.T) {
 	}
 }
 
+func TestRemoveDisconnectsEveryTransportOfMergedDevice(t *testing.T) {
+	// 场景：删除一张已合并的无线设备卡时，主连接和 mDNS 别名都必须断开，刷新后不能由别名重新出现。
+	caller := &scriptedConnectionCaller{outputs: []CommandOutput{
+		{Stdout: "List of devices attached\nadb-phone._adb-tls-connect._tcp device product:onyx model:25053RT47C\nadb-phone (2)._adb-tls-connect._tcp device product:onyx model:25053RT47C\n"},
+		{Stdout: "serial=16a424c7\n"},
+		{Stdout: "serial=16a424c7\n"},
+		{},
+		{},
+	}}
+
+	result, err := NewService(caller).Remove(context.Background(), "adb-phone._adb-tls-connect._tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"devices", "-l"},
+		{"-s", "adb-phone._adb-tls-connect._tcp", "shell", "printf 'serial='; getprop ro.serialno; printf '\nbootserial='; getprop ro.boot.serialno; printf '\nandroid_id='; settings get secure android_id 2>/dev/null"},
+		{"-s", "adb-phone (2)._adb-tls-connect._tcp", "shell", "printf 'serial='; getprop ro.serialno; printf '\nbootserial='; getprop ro.boot.serialno; printf '\nandroid_id='; settings get secure android_id 2>/dev/null"},
+		{"disconnect", "adb-phone._adb-tls-connect._tcp"},
+		{"disconnect", "adb-phone (2)._adb-tls-connect._tcp"},
+	}
+	if !reflect.DeepEqual(caller.calls, want) || !reflect.DeepEqual(result.Disconnected, []string{"adb-phone._adb-tls-connect._tcp", "adb-phone (2)._adb-tls-connect._tcp"}) {
+		t.Fatalf("calls=%#v result=%#v", caller.calls, result)
+	}
+}
+
 func codeOf(err error) string {
 	if typed, ok := err.(*apperror.Error); ok {
 		return typed.ErrorCode
