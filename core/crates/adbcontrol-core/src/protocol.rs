@@ -4,7 +4,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    adb::{validate_adb_args, AdbRunner},
+    adb::{validate_adb_args, AdbProcessManager, AdbRunner, ScrcpyServerConfig},
     assets::{find_adb_asset, resolve_asset_path, AdbManifest},
     capability::android_companion_capability_catalog,
     companion::{
@@ -93,6 +93,32 @@ struct AdbKeepAliveConfigureParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ScrcpyStartParams {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    device_id: String,
+    #[serde(default)]
+    apk_path: String,
+    #[serde(default)]
+    scid: u32,
+    #[serde(default)]
+    max_size: u16,
+    #[serde(default)]
+    video_bit_rate: u32,
+    #[serde(default)]
+    max_fps: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrcpyStopParams {
+    #[serde(default)]
+    session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct QrPairingSessionParams {
     #[serde(default)]
     session_id: String,
@@ -107,6 +133,7 @@ pub struct CoreService<R: AdbRunner, Q: CompanionCommandRouter = DisconnectedCom
     keepalive: Option<AdbKeepAliveHandle>,
     wireless_pairing: WirelessPairingManager,
     local_admin: Option<LocalAdminService>,
+    adb_processes: AdbProcessManager,
 }
 
 impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
@@ -119,6 +146,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
+            adb_processes: AdbProcessManager::default(),
         }
     }
 
@@ -135,6 +163,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
+            adb_processes: AdbProcessManager::default(),
         }
     }
 }
@@ -154,6 +183,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
+            adb_processes: AdbProcessManager::default(),
         }
     }
 
@@ -171,6 +201,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
+            adb_processes: AdbProcessManager::default(),
         }
     }
 
@@ -246,6 +277,8 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             "core.getHostTarget" => self.handle_get_host_target(request.id),
             "adb.asset.current" => self.handle_get_current_adb_asset(request.id),
             "adb.exec" => self.handle_adb_exec(request),
+            "adb.scrcpy.start" => self.handle_adb_scrcpy_start(request),
+            "adb.scrcpy.stop" => self.handle_adb_scrcpy_stop(request),
             "adb.keepalive.status" => self.handle_adb_keepalive_status(request.id),
             "adb.keepalive.configure" => self.handle_adb_keepalive_configure(request),
             "adb.wifi.qr.create" => self.handle_adb_wifi_qr_create(request.id),
@@ -308,6 +341,56 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
 
         match self.runner.run(&adb_path, &params.args) {
             Ok(output) => response_from_serializable(request.id, &output, "adb.runner"),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
+        }
+    }
+
+    fn handle_adb_scrcpy_start(&self, request: IpcRequest) -> IpcResponse {
+        let params: ScrcpyStartParams =
+            match parse_ipc_params(request.params, "adb.scrcpy.start params are invalid.") {
+                Ok(params) => params,
+                Err(error) => return IpcResponse::failure(Some(request.id), error),
+            };
+        let adb_path = match self.resolve_current_adb_path() {
+            Ok(path) => path,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        let config = ScrcpyServerConfig {
+            session_id: params.session_id,
+            device_id: params.device_id,
+            apk_path: params.apk_path,
+            scid: params.scid,
+            max_size: params.max_size,
+            video_bit_rate: params.video_bit_rate,
+            max_fps: params.max_fps,
+        };
+        match self.adb_processes.start_scrcpy(&adb_path, &config) {
+            Ok(process) => response_from_serializable(request.id, &process, "adb.scrcpy"),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
+        }
+    }
+
+    fn handle_adb_scrcpy_stop(&self, request: IpcRequest) -> IpcResponse {
+        let params: ScrcpyStopParams = match parse_ipc_params(
+            request.params,
+            "adb.scrcpy.stop params must match { sessionId: string }.",
+        ) {
+            Ok(params) => params,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        if params.session_id.is_empty() {
+            return IpcResponse::failure(
+                Some(request.id),
+                AppError::new(
+                    "SCRCPY_SESSION_INVALID",
+                    "The scrcpy session id is required.",
+                    "adb.scrcpy",
+                    false,
+                ),
+            );
+        }
+        match self.adb_processes.stop_scrcpy(&params.session_id) {
+            Ok(stopped) => IpcResponse::success(request.id, json!({"stopped": stopped})),
             Err(error) => IpcResponse::failure(Some(request.id), error),
         }
     }
@@ -397,7 +480,10 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             Ok(path) => path,
             Err(error) => return IpcResponse::failure(Some(request.id), error),
         };
-        match self.wireless_pairing.pair(&params.session_id, &self.runner, &adb_path) {
+        match self
+            .wireless_pairing
+            .pair(&params.session_id, &self.runner, &adb_path)
+        {
             Ok(result) => response_from_serializable(request.id, &result, "adb.wifi.qr"),
             Err(error) => IpcResponse::failure(Some(request.id), error),
         }

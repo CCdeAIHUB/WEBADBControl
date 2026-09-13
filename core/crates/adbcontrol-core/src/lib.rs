@@ -13,7 +13,10 @@ pub mod protocol;
 pub mod remote;
 pub mod wireless;
 
-pub use adb::{AdbCommandOutput, AdbRunner, ProcessAdbRunner};
+pub use adb::{
+    AdbCommandOutput, AdbProcessManager, AdbRunner, ProcessAdbRunner, ScrcpyServerConfig,
+    ScrcpyServerProcess,
+};
 pub use assets::{find_adb_asset, load_embedded_manifest, AdbAsset, AdbManifest};
 pub use capability::{
     android_companion_capability_catalog, Capability, CapabilityPermissionRequirement,

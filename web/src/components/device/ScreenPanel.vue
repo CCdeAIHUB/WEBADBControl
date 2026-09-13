@@ -13,9 +13,11 @@ const frameCount = ref(0)
 const lastFrameAt = ref('')
 const connected = ref(false)
 const container = ref<HTMLElement>()
-const requestedFPS = ref('2')
-const pointerStart = ref<{ x: number; y: number; clientX: number; clientY: number; at: number }>()
+const requestedFPS = ref('30')
+const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
+const activePointers = new Set<number>()
+const lastTouchMoveAt = new Map<number, number>()
 let socket: WebSocket | undefined
 let decoder: VideoDecoder | undefined
 let codecConfig: Uint8Array | undefined
@@ -23,14 +25,20 @@ let intentionalClose = false
 let connectionSeq = 0
 let actionInFlight = false
 let lastActionAt = 0
-let lastTouchMoveAt = 0
 
-const statusText = computed(() => ({ idle: '投屏未开启', connecting: '正在启动兼容投屏', live: '兼容投屏运行中', error: '画面已断开' })[status.value])
+const statusText = computed(() => streamError.value || ({ idle: '投屏未开启', connecting: '正在启动实时投屏', live: '实时投屏运行中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
 
 function start() {
   if (socket?.readyState === WebSocket.CONNECTING || socket?.readyState === WebSocket.OPEN) return
+  if (!('VideoDecoder' in window)) {
+    streamError.value = '当前浏览器不支持 WebCodecs H.264 解码，请使用最新版 Chrome、Edge 或 Safari'
+    status.value = 'error'
+    ui.failure(toAppError({ errorCode: 'WEBCODECS_UNSUPPORTED', message: streamError.value, module: 'device.screen' }))
+    return
+  }
   status.value = 'connecting'
+  streamError.value = ''
   connected.value = true
   intentionalClose = false
   const seq = connectionSeq + 1
@@ -42,21 +50,27 @@ function start() {
   current.onmessage = async (event) => {
     if (seq !== connectionSeq) return
     if (typeof event.data === 'string') {
-      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number }
-      if (meta.type !== 'meta' || !meta.width || !meta.height || !('VideoDecoder' in window)) { status.value = 'error'; return }
+      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string }
+      if (meta.type === 'error') {
+        streamError.value = meta.message || '实时投屏启动失败'
+        status.value = 'error'
+        ui.failure(toAppError({ errorCode: 'SCREEN_STREAM_FAILED', message: streamError.value, module: 'device.screen' }))
+        return
+      }
+      if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
       streamSize.value = { width: meta.width, height: meta.height }
       decoder?.close(); codecConfig = undefined
       decoder = new VideoDecoder({ output: (videoFrame) => {
         const target = canvas.value; if (target) { target.width = videoFrame.displayWidth; target.height = videoFrame.displayHeight; target.getContext('2d')?.drawImage(videoFrame, 0, 0) }
         videoFrame.close(); frameCount.value += 1; lastFrameAt.value = new Date().toLocaleTimeString(); status.value = 'live'
-      }, error: () => { if (seq === connectionSeq) status.value = 'error' } })
+      }, error: (error) => { if (seq === connectionSeq) { streamError.value = `视频解码失败：${error.message}`; status.value = 'error' } } })
       return
     }
     if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
     const bytes = new Uint8Array(event.data); const kind = bytes[0]; const data = bytes.slice(1)
     if (kind === 1) {
       codecConfig = data
-      decoder.configure({ codec: codecName(data), optimizeForLatency: true, avc: { format: 'annexb' } } as unknown as VideoDecoderConfig)
+      decoder.configure({ codec: codecName(data), optimizeForLatency: true })
       return
     }
     if (kind === 2) {
@@ -80,6 +94,7 @@ function stop() {
   intentionalClose = true
   socket?.close()
   decoder?.close(); decoder = undefined; codecConfig = undefined
+  activePointers.clear(); lastTouchMoveAt.clear()
   socket = undefined
   connected.value = false
   status.value = 'idle'
@@ -114,31 +129,30 @@ function imagePoint(event: PointerEvent) {
 
 function beginPointer(event: PointerEvent) {
   const point = imagePoint(event)
-  pointerStart.value = { x: point.x, y: point.y, clientX: event.clientX, clientY: event.clientY, at: Date.now() }
+  activePointers.add(event.pointerId)
   ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
   sendTouch(event.pointerId, 0, point)
 }
 
 function finishPointer(event: PointerEvent) {
-  const start = pointerStart.value
-  pointerStart.value = undefined
-  if (!start) return
+  if (!activePointers.delete(event.pointerId)) return
+  lastTouchMoveAt.delete(event.pointerId)
   const end = imagePoint(event)
   sendTouch(event.pointerId, 1, end)
 }
 
 function movePointer(event: PointerEvent) {
-  if (!pointerStart.value || Date.now() - lastTouchMoveAt < 16) return
-  lastTouchMoveAt = Date.now()
+  const now = Date.now()
+  if (!activePointers.has(event.pointerId) || now - (lastTouchMoveAt.get(event.pointerId) ?? 0) < 16) return
+  lastTouchMoveAt.set(event.pointerId, now)
   const point = imagePoint(event)
-  pointerStart.value = { ...pointerStart.value, x: point.x, y: point.y }
   sendTouch(event.pointerId, 2, point)
 }
 
 function cancelPointer(event: PointerEvent) {
-  if (!pointerStart.value) return
+  if (!activePointers.delete(event.pointerId)) return
   const point = imagePoint(event)
-  pointerStart.value = undefined
+  lastTouchMoveAt.delete(event.pointerId)
   sendTouch(event.pointerId, 1, point)
 }
 
@@ -190,12 +204,12 @@ onBeforeUnmount(() => { stop() })
       <SlidersHorizontal :size="15" class="text-brand-400" />
       <span class="font-medium text-slate-200">投屏参数</span>
       <label class="flex items-center gap-2">刷新帧率
-        <UiSelect v-model="requestedFPS" class="!h-8 !w-28 !border-white/10 !bg-white/5 !text-xs !text-slate-100" aria-label="投屏刷新帧率">
-          <option value="1">1 FPS · 省流</option><option value="2">2 FPS · 均衡</option><option value="5">5 FPS · 流畅</option><option value="10">10 FPS · 极限</option>
+        <UiSelect v-model="requestedFPS" class="!h-8 !w-32 !border-white/10 !bg-white/5 !text-xs !text-slate-100" aria-label="投屏刷新帧率">
+          <option value="15">15 FPS · 省流</option><option value="30">30 FPS · 流畅</option><option value="60">60 FPS · 高刷</option>
         </UiSelect>
       </label>
       <span class="rounded-md border border-brand-400/20 bg-brand-400/10 px-2 py-1 text-brand-200">后端：scrcpy H.264 视频流</span>
-      <span class="text-slate-500">预览支持点击与拖动触摸控制</span>
+      <span class="text-slate-400">移动端支持单指、多指触摸与拖动控制</span>
     </div>
     <div class="relative grid min-h-[460px] place-items-center p-5">
       <canvas v-if="streamSize.width" ref="canvas" aria-label="设备实时屏幕" class="max-h-[680px] max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />

@@ -46,7 +46,9 @@ pub struct WirelessPairingManager {
 
 impl Default for WirelessPairingManager {
     fn default() -> Self {
-        Self { pending: Mutex::new(HashMap::new()) }
+        Self {
+            pending: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -60,26 +62,73 @@ impl WirelessPairingManager {
         let mut pending = self.lock_pending()?;
         let now = Instant::now();
         pending.retain(|_, pairing| pairing.expires_at > now);
-        pending.insert(session_id.clone(), PendingPairing { service_name: service_name.clone(), password, expires_at: now + QR_PAIRING_TTL });
-        Ok(WirelessPairingQr { session_id, service_name, qr_svg, mime_type: String::from("image/svg+xml"), expires_at })
+        pending.insert(
+            session_id.clone(),
+            PendingPairing {
+                service_name: service_name.clone(),
+                password,
+                expires_at: now + QR_PAIRING_TTL,
+            },
+        );
+        Ok(WirelessPairingQr {
+            session_id,
+            service_name,
+            qr_svg,
+            mime_type: String::from("image/svg+xml"),
+            expires_at,
+        })
     }
 
-    pub fn pair<R: AdbRunner>(&self, session_id: &str, runner: &R, adb_path: &std::path::Path) -> Result<WirelessPairingResult, AppError> {
+    pub fn pair<R: AdbRunner>(
+        &self,
+        session_id: &str,
+        runner: &R,
+        adb_path: &std::path::Path,
+    ) -> Result<WirelessPairingResult, AppError> {
         let pairing = self.get_pending(session_id)?;
         let discovery = runner.run(adb_path, &[String::from("mdns"), String::from("services")])?;
         if discovery.exit_code != 0 {
-            return Err(AppError::new("ADB_QR_PAIRING_DISCOVERY_FAILED", "ADB could not query mDNS pairing services.", "adb.wifi.qr", true));
+            return Err(AppError::new(
+                "ADB_QR_PAIRING_DISCOVERY_FAILED",
+                "ADB could not query mDNS pairing services.",
+                "adb.wifi.qr",
+                true,
+            ));
         }
-        let endpoint = find_pairing_endpoint(&discovery.stdout, &pairing.service_name).ok_or_else(|| {
-            AppError::new("ADB_QR_PAIRING_NOT_DISCOVERED", "The phone has not advertised the QR pairing service yet.", "adb.wifi.qr", true)
+        let endpoint =
+            find_pairing_endpoint(&discovery.stdout, &pairing.service_name).ok_or_else(|| {
+                AppError::new(
+                    "ADB_QR_PAIRING_NOT_DISCOVERED",
+                    "The phone has not advertised the QR pairing service yet.",
+                    "adb.wifi.qr",
+                    true,
+                )
                 .with_suggestion("Keep the QR scanner open and retry this request shortly.")
-        })?;
-        let output = runner.run(adb_path, &[String::from("pair"), endpoint.clone(), pairing.password])?;
-        if output.exit_code != 0 || !output.stdout.trim_start().to_ascii_lowercase().starts_with("successfully paired to ") {
-            return Err(AppError::new("ADB_QR_PAIRING_FAILED", "ADB did not confirm QR-code pairing.", "adb.wifi.qr", true));
+            })?;
+        let output = runner.run(
+            adb_path,
+            &[String::from("pair"), endpoint.clone(), pairing.password],
+        )?;
+        if output.exit_code != 0
+            || !output
+                .stdout
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("successfully paired to ")
+        {
+            return Err(AppError::new(
+                "ADB_QR_PAIRING_FAILED",
+                "ADB did not confirm QR-code pairing.",
+                "adb.wifi.qr",
+                true,
+            ));
         }
         self.cancel(session_id)?;
-        Ok(WirelessPairingResult { paired: true, service_name: pairing.service_name, endpoint })
+        Ok(WirelessPairingResult {
+            paired: true,
+            service_name: pairing.service_name,
+            endpoint,
+        })
     }
 
     pub fn cancel(&self, session_id: &str) -> Result<(), AppError> {
@@ -91,24 +140,53 @@ impl WirelessPairingManager {
         let mut pending = self.lock_pending()?;
         let now = Instant::now();
         pending.retain(|_, pairing| pairing.expires_at > now);
-        pending.get(session_id).cloned().ok_or_else(|| AppError::new("ADB_QR_PAIRING_SESSION_INVALID", "The QR pairing session is missing, expired, or cancelled.", "adb.wifi.qr", true))
+        pending.get(session_id).cloned().ok_or_else(|| {
+            AppError::new(
+                "ADB_QR_PAIRING_SESSION_INVALID",
+                "The QR pairing session is missing, expired, or cancelled.",
+                "adb.wifi.qr",
+                true,
+            )
+        })
     }
 
-    fn lock_pending(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, PendingPairing>>, AppError> {
-        self.pending.lock().map_err(|_| AppError::new("ADB_QR_PAIRING_STATE_UNAVAILABLE", "The QR pairing state is unavailable.", "adb.wifi.qr", true))
+    fn lock_pending(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<String, PendingPairing>>, AppError> {
+        self.pending.lock().map_err(|_| {
+            AppError::new(
+                "ADB_QR_PAIRING_STATE_UNAVAILABLE",
+                "The QR pairing state is unavailable.",
+                "adb.wifi.qr",
+                true,
+            )
+        })
     }
 }
 
 fn random_ascii(length: usize) -> String {
-    (0..length).map(|_| char::from(QR_RANDOM_ALPHABET[rand::random_range(0..QR_RANDOM_ALPHABET.len())])).collect()
+    (0..length)
+        .map(|_| char::from(QR_RANDOM_ALPHABET[rand::random_range(0..QR_RANDOM_ALPHABET.len())]))
+        .collect()
 }
 
 fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn render_qr_svg(content: &str) -> Result<String, AppError> {
-    let code = QrCode::new(content.as_bytes()).map_err(|error| AppError::new("ADB_QR_GENERATION_FAILED", "Core failed to encode the wireless ADB pairing QR code.", "adb.wifi.qr", true).with_cause(error))?;
+    let code = QrCode::new(content.as_bytes()).map_err(|error| {
+        AppError::new(
+            "ADB_QR_GENERATION_FAILED",
+            "Core failed to encode the wireless ADB pairing QR code.",
+            "adb.wifi.qr",
+            true,
+        )
+        .with_cause(error)
+    })?;
     let width = code.width();
     let canvas = width + QR_QUIET_ZONE_MODULES * 2;
     let mut path = String::new();
@@ -128,7 +206,8 @@ fn find_pairing_endpoint(output: &str, service_name: &str) -> Option<String> {
         let name = fields.next()?;
         let service_type = fields.next()?;
         let endpoint = fields.next()?;
-        (name == service_name && service_type == "_adb-tls-pairing._tcp").then(|| endpoint.to_string())
+        (name == service_name && service_type == "_adb-tls-pairing._tcp")
+            .then(|| endpoint.to_string())
     })
 }
 
@@ -138,7 +217,9 @@ mod tests {
 
     #[test]
     fn create_qr_hides_pairing_password_from_serialized_result() {
-        let qr = WirelessPairingManager::default().create_qr().expect("QR should generate");
+        let qr = WirelessPairingManager::default()
+            .create_qr()
+            .expect("QR should generate");
         assert!(qr.qr_svg.starts_with("<svg"));
         assert!(qr.service_name.starts_with("studio-"));
         assert!(!serde_json::to_string(&qr).unwrap().contains("password"));

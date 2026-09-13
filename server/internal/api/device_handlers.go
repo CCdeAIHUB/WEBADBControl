@@ -116,17 +116,37 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	defer connection.Close()
-	session, err := s.devices.StartScrcpy(request.Context(), request.PathValue("id"))
-	if err != nil { _ = connection.WriteJSON(map[string]any{"type":"error", "message":"无法启动 H.264 投屏：" + err.Error()}); return }
+	frameRate := screenFrameRate(request.URL.Query().Get("fps"), 30)
+	session, err := s.devices.StartScrcpy(request.Context(), request.PathValue("id"), device.ScrcpyOptions{FrameRate: frameRate})
+	if err != nil {
+		s.logger.Error("screen_start_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "fps", frameRate, "error", err)
+		_ = connection.WriteJSON(map[string]any{"type": "error", "message": "无法启动 H.264 投屏：" + err.Error()})
+		return
+	}
 	defer session.Close()
 	width, height := session.Size()
-	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "width", width, "height", height)
-	if err := connection.WriteJSON(map[string]any{"type":"meta", "codec":"h264", "width":width, "height":height}); err != nil { return }
+	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "width", width, "height", height, "fps", frameRate)
+	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height}); err != nil {
+		return
+	}
 	go func() {
 		for {
-			var control struct { Type string `json:"type"`; Action int `json:"action"`; PointerID uint32 `json:"pointerId"`; X int `json:"x"`; Y int `json:"y"`; Width int `json:"width"`; Height int `json:"height"` }
-			if err := connection.ReadJSON(&control); err != nil { session.Close(); return }
-			if control.Type != "touch" { continue }
+			var control struct {
+				Type      string `json:"type"`
+				Action    int    `json:"action"`
+				PointerID uint32 `json:"pointerId"`
+				X         int    `json:"x"`
+				Y         int    `json:"y"`
+				Width     int    `json:"width"`
+				Height    int    `json:"height"`
+			}
+			if err := connection.ReadJSON(&control); err != nil {
+				session.Close()
+				return
+			}
+			if control.Type != "touch" {
+				continue
+			}
 			if err := session.SendTouch(control.Action, control.PointerID, control.X, control.Y, control.Width, control.Height); err != nil {
 				s.logger.Warn("screen_touch_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
 			}
@@ -138,8 +158,15 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 			s.logger.Warn("screen_stream_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
 			return
 		}
-		if packet == nil { continue }
-		messageType := byte(0); if config { messageType = 1 } else if keyFrame { messageType = 2 }
+		if packet == nil {
+			continue
+		}
+		messageType := byte(0)
+		if config {
+			messageType = 1
+		} else if keyFrame {
+			messageType = 2
+		}
 		if err := connection.WriteMessage(websocket.BinaryMessage, append([]byte{messageType}, packet...)); err != nil {
 			s.logger.Info("screen_websocket_closed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 			return
@@ -148,8 +175,8 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 }
 
 func screenFrameRate(requested string, configured int) int {
-	if configured < 1 || configured > 10 {
-		configured = 2
+	if configured < 1 || configured > 60 {
+		configured = 30
 	}
 	if strings.TrimSpace(requested) == "" {
 		return configured
@@ -158,8 +185,8 @@ func screenFrameRate(requested string, configured int) int {
 	if err != nil || fps < 1 {
 		return configured
 	}
-	if fps > 10 {
-		return 10
+	if fps > 60 {
+		return 60
 	}
 	return fps
 }
