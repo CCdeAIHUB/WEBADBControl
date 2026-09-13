@@ -153,7 +153,10 @@ func randomScrcpyID() (uint32, error) {
 	if _, err := rand.Read(random[:]); err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint32(random[:]) | 0x10000000, nil
+	// scrcpy parses scid through Java Integer.parseInt(radix 16), so the
+	// hexadecimal value must stay within signed i32 even though the wire id is
+	// represented as u32 in Go and Rust.
+	return (binary.BigEndian.Uint32(random[:]) & 0x6fffffff) | 0x10000000, nil
 }
 
 func connectScrcpyVideo(ctx context.Context, port int) (net.Conn, error) {

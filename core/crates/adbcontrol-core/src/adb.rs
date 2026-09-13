@@ -235,7 +235,7 @@ fn validate_scrcpy_config(config: &ScrcpyServerConfig) -> Result<(), AppError> {
         || config.device_id.trim().is_empty()
         || config.device_id.len() > 512
         || !valid_apk_path
-        || config.scid == 0
+        || !(0x1000_0000..=0x7fff_ffff).contains(&config.scid)
         || !(128..=4096).contains(&config.max_size)
         || !(500_000..=32_000_000).contains(&config.video_bit_rate)
         || !(1..=60).contains(&config.max_fps)
@@ -325,6 +325,23 @@ mod tests {
         };
 
         let error = build_scrcpy_server_args(&config).expect_err("shell metacharacters must fail");
+
+        assert_eq!(error.error_code, "SCRCPY_CONFIG_INVALID");
+    }
+
+    #[test]
+    fn rejects_scrcpy_id_above_java_signed_integer_range() {
+        let config = ScrcpyServerConfig {
+            session_id: "web-f0000000".to_string(),
+            device_id: "device-1".to_string(),
+            apk_path: "/data/app/~~abc==/com.adbcontrol.companion/base.apk".to_string(),
+            scid: 0xf000_0000,
+            max_size: 1280,
+            video_bit_rate: 4_000_000,
+            max_fps: 30,
+        };
+
+        let error = build_scrcpy_server_args(&config).expect_err("signed overflow must fail");
 
         assert_eq!(error.error_code, "SCRCPY_CONFIG_INVALID");
     }

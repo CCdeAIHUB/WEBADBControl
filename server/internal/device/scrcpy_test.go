@@ -34,3 +34,15 @@ func TestNormalizeScrcpyOptionsUsesVideoDefaultsAndBounds(t *testing.T) {
 		t.Fatalf("valid video options were changed: %#v", selected)
 	}
 }
+
+func TestRandomScrcpyIDAlwaysFitsJavaSignedInteger(t *testing.T) {
+	for range 256 {
+		value, err := randomScrcpyID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value < 0x10000000 || value > 0x7fffffff {
+			t.Fatalf("scrcpy id is outside Java signed integer range: %08x", value)
+		}
+	}
+}
