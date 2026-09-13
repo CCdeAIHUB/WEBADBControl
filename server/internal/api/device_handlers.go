@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -155,7 +157,11 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	for {
 		packet, config, keyFrame, err := session.ReadPacket()
 		if err != nil {
-			s.logger.Warn("screen_stream_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+				s.logger.Info("screen_stream_closed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"))
+			} else {
+				s.logger.Warn("screen_stream_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
+			}
 			return
 		}
 		if packet == nil {
