@@ -12,6 +12,7 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.1.12",
     "@vueuse/core": "^13.6.0",
+    "@yume-chan/scrcpy-decoder-tinyh264": "2.1.0",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^3.0.3",
     "tailwindcss": "^4.1.12",

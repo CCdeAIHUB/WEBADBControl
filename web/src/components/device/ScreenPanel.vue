@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Expand, Home, LoaderCircle, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
+import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
 
@@ -19,8 +20,9 @@ const streamSize = ref({ width: 0, height: 0 })
 const activePointers = new Set<number>()
 const lastTouchMoveAt = new Map<number, number>()
 let socket: WebSocket | undefined
-let decoder: VideoDecoder | undefined
-let codecConfig: Uint8Array | undefined
+let decoder: ScreenDecoder | undefined
+let decoderPacketQueue = Promise.resolve()
+const decoderMode = ref<ScreenDecoderMode>(browserScreenDecoderPreference())
 let intentionalClose = false
 let connectionSeq = 0
 let actionInFlight = false
@@ -31,12 +33,7 @@ const canStop = computed(() => connected.value || status.value === 'connecting')
 
 function start() {
   if (socket?.readyState === WebSocket.CONNECTING || socket?.readyState === WebSocket.OPEN) return
-  if (!('VideoDecoder' in window)) {
-    streamError.value = '当前浏览器不支持 WebCodecs H.264 解码，请使用最新版 Chrome、Edge 或 Safari'
-    status.value = 'error'
-    ui.failure(toAppError({ errorCode: 'WEBCODECS_UNSUPPORTED', message: streamError.value, module: 'device.screen' }))
-    return
-  }
+  decoderMode.value = browserScreenDecoderPreference()
   status.value = 'connecting'
   streamError.value = ''
   connected.value = true
@@ -47,37 +44,16 @@ function start() {
   const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}`)
   socket = current
   current.binaryType = 'arraybuffer'
-  current.onmessage = async (event) => {
+  decoderPacketQueue = Promise.resolve()
+  current.onmessage = (event) => {
     if (seq !== connectionSeq) return
-    if (typeof event.data === 'string') {
-      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string }
-      if (meta.type === 'error') {
-        streamError.value = meta.message || '实时投屏启动失败'
-        status.value = 'error'
-        ui.failure(toAppError({ errorCode: 'SCREEN_STREAM_FAILED', message: streamError.value, module: 'device.screen' }))
-        return
-      }
-      if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
-      streamSize.value = { width: meta.width, height: meta.height }
-      decoder?.close(); codecConfig = undefined
-      decoder = new VideoDecoder({ output: (videoFrame) => {
-        const target = canvas.value; if (target) { target.width = videoFrame.displayWidth; target.height = videoFrame.displayHeight; target.getContext('2d')?.drawImage(videoFrame, 0, 0) }
-        videoFrame.close(); frameCount.value += 1; lastFrameAt.value = new Date().toLocaleTimeString(); status.value = 'live'
-      }, error: (error) => { if (seq === connectionSeq) { streamError.value = `视频解码失败：${error.message}`; status.value = 'error' } } })
-      return
-    }
-    if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
-    const bytes = new Uint8Array(event.data); const kind = bytes[0]; const data = bytes.slice(1)
-    if (kind === 1) {
-      codecConfig = data
-      decoder.configure({ codec: codecName(data), optimizeForLatency: true })
-      return
-    }
-    if (kind === 2) {
-      if (!codecConfig) return
-      const combined = new Uint8Array(codecConfig.length + data.length); combined.set(codecConfig); combined.set(data, codecConfig.length)
-      decoder.decode(new EncodedVideoChunk({ type: 'key', timestamp: performance.now() * 1000, data: combined }))
-    } else decoder.decode(new EncodedVideoChunk({ type: 'delta', timestamp: performance.now() * 1000, data }))
+    decoderPacketQueue = decoderPacketQueue.then(() => handleStreamMessage(event, seq)).catch((error: unknown) => {
+      if (seq !== connectionSeq) return
+      const reason = error instanceof Error ? error.message : String(error)
+      streamError.value = `视频解码失败：${reason}`
+      status.value = 'error'
+      ui.failure(toAppError({ errorCode: 'SCREEN_DECODER_FAILED', message: streamError.value, module: 'device.screen' }))
+    })
   }
   current.onerror = () => {
     if (seq === connectionSeq) status.value = 'error'
@@ -89,11 +65,55 @@ function start() {
   }
 }
 
+async function handleStreamMessage(event: MessageEvent, seq: number) {
+    if (seq !== connectionSeq) return
+    if (typeof event.data === 'string') {
+      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string }
+      if (meta.type === 'error') {
+        streamError.value = meta.message || '实时投屏启动失败'
+        status.value = 'error'
+        ui.failure(toAppError({ errorCode: 'SCREEN_STREAM_FAILED', message: streamError.value, module: 'device.screen' }))
+        return
+      }
+      if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
+      streamSize.value = { width: meta.width, height: meta.height }
+      decoder?.dispose()
+      decoder = undefined
+      await nextTick()
+      const target = canvas.value
+      if (!target) throw new Error('投屏画布尚未就绪')
+      const created = await createScreenDecoder(decoderMode.value, target, {
+        onFrame: () => {
+          if (seq !== connectionSeq) return
+          frameCount.value += 1
+          lastFrameAt.value = new Date().toLocaleTimeString()
+          status.value = 'live'
+        },
+        onError: (error) => {
+          if (seq !== connectionSeq) return
+          streamError.value = `视频解码失败：${error.message}`
+          status.value = 'error'
+        },
+      })
+      if (seq !== connectionSeq) { created.dispose(); return }
+      decoder = created
+      return
+    }
+    if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
+    const bytes = new Uint8Array(event.data); const kind = bytes[0]; const data = bytes.slice(1)
+    if (kind === 1) {
+      await decoder.configure(data)
+      return
+    }
+    await decoder.decode(data, kind === 2)
+}
+
 function stop() {
   connectionSeq += 1
   intentionalClose = true
   socket?.close()
-  decoder?.close(); decoder = undefined; codecConfig = undefined
+  decoder?.dispose(); decoder = undefined
+  decoderPacketQueue = Promise.resolve()
   activePointers.clear(); lastTouchMoveAt.clear()
   socket = undefined
   connected.value = false
@@ -161,17 +181,6 @@ function sendTouch(pointerId: number, action: number, point: { x: number; y: num
   socket.send(JSON.stringify({ type: 'touch', action, pointerId: pointerId >>> 0, ...point }))
 }
 
-function codecName(config: Uint8Array) {
-  for (let index = 0; index + 7 < config.length; index += 1) {
-    const start = config[index] === 0 && config[index + 1] === 0 && (config[index + 2] === 1 || (config[index + 2] === 0 && config[index + 3] === 1))
-    if (!start) continue
-    const offset = index + (config[index + 2] === 1 ? 3 : 4)
-    if ((config[offset] & 0x1f) !== 7) continue
-    return `avc1.${[config[offset + 1], config[offset + 2], config[offset + 3]].map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`
-  }
-  return 'avc1.42E01E'
-}
-
 function reserveActionSlot() {
   const now = Date.now()
   if (actionInFlight || now - lastActionAt < 220) return false
@@ -209,6 +218,7 @@ onBeforeUnmount(() => { stop() })
         </UiSelect>
       </label>
       <span class="rounded-md border border-brand-400/20 bg-brand-400/10 px-2 py-1 text-brand-200">后端：scrcpy H.264 视频流</span>
+      <span class="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-1 text-sky-200">解码：{{ screenDecoderStatusText(decoderMode) }}</span>
       <span class="text-slate-400">移动端支持单指、多指触摸与拖动控制</span>
     </div>
     <div class="relative grid min-h-[460px] place-items-center p-5">
