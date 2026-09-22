@@ -394,11 +394,29 @@ func (s *Server) downloadFile(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request) {
-	s.coreResult(writer, request, "device.getCapabilities", map[string]any{"deviceId": request.PathValue("id")})
+	access, err := s.devices.CompanionCapabilities(request.Context(), request.PathValue("id"))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writer.Header().Set("X-ADBControl-Companion-Transport", access.Transport)
+	if access.Transport == device.CompanionTransportADBBroadcast {
+		s.logger.Info("companion_capability_catalog_fallback", "deviceId", request.PathValue("id"), "transport", access.Transport)
+	}
+	writeData(writer, http.StatusOK, access.Items)
 }
 
 func (s *Server) permissions(writer http.ResponseWriter, request *http.Request) {
-	s.coreResult(writer, request, "device.getPermissionState", map[string]any{"deviceId": request.PathValue("id")})
+	access, err := s.devices.CompanionPermissions(request.Context(), request.PathValue("id"))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writer.Header().Set("X-ADBControl-Companion-Transport", access.Transport)
+	if access.Transport == device.CompanionTransportADBBroadcast {
+		s.logger.Info("companion_permission_matrix_unavailable", "deviceId", request.PathValue("id"), "transport", access.Transport)
+	}
+	writeData(writer, http.StatusOK, access.Items)
 }
 
 func (s *Server) invokeCapability(writer http.ResponseWriter, request *http.Request) {
@@ -410,7 +428,16 @@ func (s *Server) invokeCapability(writer http.ResponseWriter, request *http.Requ
 	if !decodeJSON(writer, request, &body) {
 		return
 	}
-	s.coreResult(writer, request, "device.invoke", map[string]any{"deviceId": request.PathValue("id"), "capabilityId": body.CapabilityID, "operation": body.Operation, "args": body.Args})
+	result, transport, err := s.devices.InvokeCompanionCapability(request.Context(), request.PathValue("id"), body.CapabilityID, body.Operation, body.Args)
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return
+	}
+	writer.Header().Set("X-ADBControl-Companion-Transport", transport)
+	if transport == device.CompanionTransportADBBroadcast {
+		s.logger.Info("companion_invoke_adb_fallback", "deviceId", request.PathValue("id"), "capabilityId", body.CapabilityID, "operation", body.Operation)
+	}
+	writeData(writer, http.StatusOK, result)
 }
 
 func (s *Server) coreResult(writer http.ResponseWriter, request *http.Request, method string, params any) {
@@ -423,7 +450,7 @@ func (s *Server) coreResult(writer http.ResponseWriter, request *http.Request, m
 }
 
 func (s *Server) companionStatus(writer http.ResponseWriter, request *http.Request) {
-	ctx, cancel := withTimeout(request, 3*time.Second)
+	ctx, cancel := withTimeout(request, 8*time.Second)
 	defer cancel()
 	status, err := s.devices.CompanionStatus(ctx, request.PathValue("id"))
 	if err != nil {

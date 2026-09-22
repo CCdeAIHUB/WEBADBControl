@@ -13,10 +13,17 @@ import (
 )
 
 const (
-	companionPackageName       = "com.adbcontrol.companion"
-	companionCommandAction     = "com.adbcontrol.companion.EXECUTE_COMMAND"
-	companionCommandResultPath = "/sdcard/Android/data/com.adbcontrol.companion/files/command-results"
+	companionPackageName           = "com.adbcontrol.companion"
+	companionCommandAction         = "com.adbcontrol.companion.EXECUTE_COMMAND"
+	companionCommandResultPath     = "/sdcard/Android/data/com.adbcontrol.companion/files/command-results"
+	CompanionTransportQUIC         = "quic"
+	CompanionTransportADBBroadcast = "adb-broadcast"
 )
+
+type CompanionCollectionAccess struct {
+	Items     []map[string]any
+	Transport string
+}
 
 type CompanionStatus struct {
 	Installed     bool   `json:"installed"`
@@ -53,6 +60,60 @@ func (s *Service) ExecuteCompanionCommand(ctx context.Context, deviceID, capabil
 		return "", err
 	}
 	return payload, nil
+}
+
+func (s *Service) CompanionCapabilities(ctx context.Context, deviceID string) (CompanionCollectionAccess, error) {
+	var capabilities []map[string]any
+	err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities)
+	if err == nil {
+		return CompanionCollectionAccess{Items: capabilities, Transport: CompanionTransportQUIC}, nil
+	}
+	if !isCompanionSessionUnavailable(err) {
+		return CompanionCollectionAccess{}, err
+	}
+
+	// The static catalog remains owned by Rust Core. ADB broadcast is the same
+	// compatibility path used by the Windows client while QUIC is not ready.
+	if err := s.core.Call(ctx, "capability.list", map[string]any{}, &capabilities); err != nil {
+		return CompanionCollectionAccess{}, err
+	}
+	return CompanionCollectionAccess{Items: capabilities, Transport: CompanionTransportADBBroadcast}, nil
+}
+
+func (s *Service) CompanionPermissions(ctx context.Context, deviceID string) (CompanionCollectionAccess, error) {
+	var permissions []map[string]any
+	err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions)
+	if err == nil {
+		return CompanionCollectionAccess{Items: permissions, Transport: CompanionTransportQUIC}, nil
+	}
+	if !isCompanionSessionUnavailable(err) {
+		return CompanionCollectionAccess{}, err
+	}
+	// ADB broadcast validates permissions per operation and returns a structured
+	// permission error. It cannot publish the full QUIC permission matrix.
+	return CompanionCollectionAccess{Items: []map[string]any{}, Transport: CompanionTransportADBBroadcast}, nil
+}
+
+func (s *Service) InvokeCompanionCapability(ctx context.Context, deviceID, capabilityID, operation string, args map[string]any) (map[string]any, string, error) {
+	var result map[string]any
+	err := s.core.Call(ctx, "device.invoke", map[string]any{
+		"deviceId": deviceID, "capabilityId": capabilityID, "operation": operation, "args": args,
+	}, &result)
+	if err == nil {
+		return result, CompanionTransportQUIC, nil
+	}
+	if !isCompanionSessionUnavailable(err) {
+		return nil, CompanionTransportQUIC, err
+	}
+
+	payload, err := s.ExecuteCompanionCommand(ctx, deviceID, capabilityID, operation, args)
+	if err != nil {
+		return nil, CompanionTransportADBBroadcast, err
+	}
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return nil, CompanionTransportADBBroadcast, apperror.Wrap("COMPANION_RESULT_INVALID", "Companion 返回了无法解析的结果", "device.companion", true, err)
+	}
+	return result, CompanionTransportADBBroadcast, nil
 }
 
 type companionCommandEnvelope struct {
@@ -115,7 +176,9 @@ func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (Compani
 func (s *Service) readCompanionCommandResult(ctx context.Context, deviceID, requestID string) (string, error) {
 	resultPath := companionCommandResultPath + "/" + requestID + ".json"
 	var lastErr error
-	for attempt := 0; attempt < 8; attempt++ {
+	// Cold-starting a stopped Companion process on OEM Android can take more
+	// than the old 800ms window, especially over wireless ADB.
+	for attempt := 0; attempt < 30; attempt++ {
 		output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "cat", resultPath))
 		if err == nil && strings.TrimSpace(output.Stdout) != "" {
 			return strings.TrimSpace(output.Stdout), nil
@@ -131,6 +194,14 @@ func (s *Service) readCompanionCommandResult(ctx context.Context, deviceID, requ
 		return "", lastErr
 	}
 	return "", apperror.New("COMPANION_RESULT_MISSING", "Companion 未返回命令结果", "device.companion", true)
+}
+
+func isCompanionSessionUnavailable(err error) bool {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		return false
+	}
+	return appErr.ErrorCode == "COMPANION_DEVICE_NOT_CONNECTED" || appErr.ErrorCode == "COMPANION_SESSION_NOT_CONNECTED"
 }
 
 func shellQuote(value string) string {

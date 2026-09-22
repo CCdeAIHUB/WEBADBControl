@@ -18,7 +18,8 @@ const operation = ref('')
 const argumentsJson = ref('{}')
 const companionError = ref('')
 
-const quicConnected = computed(() => capabilities.value.length > 0 || permissions.value.length > 0)
+const quicConnected = computed(() => permissions.value.length > 0)
+const adbCompatibilityMode = computed(() => status.value?.adbResponsive && capabilities.value.length > 0 && !quicConnected.value)
 const statusTone = computed(() => {
   if (quicConnected.value) return 'connected'
   if (status.value?.adbResponsive) return 'adb'
@@ -27,12 +28,14 @@ const statusTone = computed(() => {
 })
 const statusTitle = computed(() => {
   if (quicConnected.value) return '伴侣 QUIC 会话已连接'
+  if (adbCompatibilityMode.value) return '伴侣 ADB 兼容通道已连接'
   if (status.value?.adbResponsive) return '伴侣 App ADB 可达'
   if (status.value?.installed === false) return '未安装伴侣应用'
   return '等待伴侣连接'
 })
 const statusMessage = computed(() => {
   if (quicConnected.value) return '已通过原 Core/QUIC 同步能力目录，可以使用完整伴侣能力。'
+  if (adbCompatibilityMode.value) return 'QUIC 会话尚未建立；能力目录来自 Rust Core，操作将通过与 Windows 客户端一致的 ADB broadcast 通道执行并逐项校验权限。'
   if (status.value?.adbResponsive) return 'App 已安装且 broadcast 探测正常；如果能力目录为空，请在手机端确认 Companion 服务与权限。'
   return status.value?.message || '请按流程安装、打开并授权 Companion。'
 })
@@ -58,6 +61,11 @@ async function load() {
 }
 
 function permissionFor(id: string) { return permissions.value.find(item => item.capabilityId === id) }
+function permissionLabel(id: string) {
+  const permission = permissionFor(id)
+  if (!permission && adbCompatibilityMode.value) return '操作时校验'
+  return permission?.granted ? '已授权' : '待授权'
+}
 
 async function install() {
   try { await api(`/devices/${encodeURIComponent(props.deviceId)}/companion/install`, { method: 'POST', body: '{}' }); ui.notify('伴侣应用已安装', '请在设备上打开 ADBControl Companion 并按提示授权。', 'success') }
@@ -116,7 +124,7 @@ onMounted(load)
     <section class="grid gap-4">
       <div class="card overflow-hidden">
         <div class="flex items-center border-b border-slate-100 p-4 dark:border-white/7"><div><h3 class="section-title m-0">能力与权限</h3><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">选择能力后可在右侧执行对应操作</p></div><button class="icon-button ml-auto" title="刷新" @click="load"><RefreshCw :size="16" :class="loading ? 'animate-spin' : ''" /></button></div>
-        <div class="divide-y divide-slate-100 dark:divide-white/7"><button v-for="capability in capabilities" :key="capability.id" class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-white/5" @click="choose(capability)"><div class="grid size-9 place-items-center rounded-lg" :class="permissionFor(capability.id)?.granted ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300' : 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300'"><CheckCircle2 v-if="permissionFor(capability.id)?.granted" :size="17" /><ShieldAlert v-else :size="17" /></div><div class="min-w-0 flex-1"><div class="truncate text-sm font-semibold">{{ capability.displayName || capability.id }}</div><div class="mt-0.5 truncate font-mono text-[10px] text-slate-500 dark:text-slate-300">{{ capability.id }}</div></div><span class="text-[10px] font-medium" :class="permissionFor(capability.id)?.granted ? 'text-brand-700 dark:text-brand-300' : 'text-amber-700 dark:text-amber-300'">{{ permissionFor(capability.id)?.granted ? '已授权' : '待授权' }}</span></button><div v-if="!capabilities.length && !loading" class="p-10 text-center text-xs text-slate-500 dark:text-slate-300"><Wifi :size="25" class="mx-auto mb-3" />尚未同步到 Companion 能力</div></div>
+        <div class="divide-y divide-slate-100 dark:divide-white/7"><button v-for="capability in capabilities" :key="capability.id" class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-white/5" @click="choose(capability)"><div class="grid size-9 place-items-center rounded-lg" :class="permissionFor(capability.id)?.granted ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300' : adbCompatibilityMode ? 'bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300' : 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300'"><CheckCircle2 v-if="permissionFor(capability.id)?.granted" :size="17" /><Wifi v-else-if="adbCompatibilityMode" :size="17" /><ShieldAlert v-else :size="17" /></div><div class="min-w-0 flex-1"><div class="truncate text-sm font-semibold">{{ capability.displayName || capability.id }}</div><div class="mt-0.5 truncate font-mono text-[10px] text-slate-500 dark:text-slate-300">{{ capability.id }}</div></div><span class="text-[10px] font-medium" :class="permissionFor(capability.id)?.granted ? 'text-brand-700 dark:text-brand-300' : adbCompatibilityMode ? 'text-sky-700 dark:text-sky-300' : 'text-amber-700 dark:text-amber-300'">{{ permissionLabel(capability.id) }}</span></button><div v-if="!capabilities.length && !loading" class="p-10 text-center text-xs text-slate-500 dark:text-slate-300"><Wifi :size="25" class="mx-auto mb-3" />尚未同步到 Companion 能力</div></div>
       </div>
 
       <section class="card p-5"><div class="flex items-center gap-2"><KeyRound :size="17" class="text-brand-600" /><h3 class="section-title m-0">能力调用</h3></div><template v-if="selected"><div class="mt-5 rounded-lg bg-slate-50 p-3 dark:bg-white/5"><div class="text-xs font-semibold">{{ selected.displayName || selected.id }}</div><div class="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-300">{{ selected.id }}</div></div><label class="mt-4 block text-xs font-medium text-slate-700 dark:text-slate-200">操作</label><UiSelect v-model="operation" class="mt-2" aria-label="能力操作"><option v-for="item in selected.operations" :key="item" :value="item">{{ item }}</option></UiSelect><label class="mt-4 block text-xs font-medium text-slate-700 dark:text-slate-200">参数 JSON</label><textarea v-model="argumentsJson" class="field mt-2 !h-36 py-3 font-mono text-xs" spellcheck="false" /><button class="btn-primary mt-4 w-full" @click="invoke"><Play :size="15" />发送请求</button></template><div v-else class="grid min-h-56 place-items-center text-center"><div><KeyRound :size="25" class="mx-auto mb-3 text-slate-400 dark:text-slate-500" /><p class="m-0 text-xs text-slate-500 dark:text-slate-300">从能力列表选择一项</p></div></div></section>
