@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Expand, Home, LoaderCircle, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Expand, Home, LoaderCircle, Minimize2, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
+import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
@@ -17,6 +18,7 @@ const container = ref<HTMLElement>()
 const requestedFPS = ref('30')
 const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
+const isFullscreen = ref(false)
 const activePointers = new Set<number>()
 const lastTouchMoveAt = new Map<number, number>()
 let socket: WebSocket | undefined
@@ -52,6 +54,7 @@ function start() {
       const reason = error instanceof Error ? error.message : String(error)
       streamError.value = `视频解码失败：${reason}`
       status.value = 'error'
+      reportScreenError('SCREEN_DECODER_FAILED', streamError.value, { decoder: decoderMode.value })
       ui.failure(toAppError({ errorCode: 'SCREEN_DECODER_FAILED', message: streamError.value, module: 'device.screen' }))
     })
   }
@@ -61,7 +64,10 @@ function start() {
   current.onclose = () => {
     if (socket === current) socket = undefined
     if (seq === connectionSeq) connected.value = false
-    if (seq === connectionSeq && !intentionalClose && props.active) status.value = 'error'
+    if (seq === connectionSeq && !intentionalClose && props.active) {
+      status.value = 'error'
+      if (frameCount.value === 0) reportScreenError('SCREEN_STREAM_CLOSED_BEFORE_FRAME', '投屏连接在首帧显示前关闭', { decoder: decoderMode.value })
+    }
   }
 }
 
@@ -93,6 +99,7 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
           if (seq !== connectionSeq) return
           streamError.value = `视频解码失败：${error.message}`
           status.value = 'error'
+          reportScreenError('SCREEN_DECODER_CALLBACK_FAILED', streamError.value, { decoder: decoderMode.value })
         },
       })
       if (seq !== connectionSeq) { created.dispose(); return }
@@ -189,16 +196,43 @@ function reserveActionSlot() {
   return true
 }
 
-function fullscreen() { container.value?.requestFullscreen() }
+function reportScreenError(errorCode: string, message: string, details: Record<string, unknown>) {
+  reportClientError({
+    errorCode,
+    message,
+    source: 'screen.stream',
+    route: location.pathname,
+    details: { deviceId: props.deviceId, ...details },
+  })
+}
+
+function syncFullscreenState() {
+  isFullscreen.value = document.fullscreenElement === container.value
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement === container.value) await document.exitFullscreen()
+    else if (container.value) await container.value.requestFullscreen()
+  } catch (error) {
+    const appError = toAppError({ errorCode: 'SCREEN_FULLSCREEN_FAILED', message: error instanceof Error ? error.message : '无法切换全屏', module: 'device.screen' })
+    reportScreenError(appError.errorCode, appError.message, {})
+    ui.failure(appError)
+  }
+}
 
 watch(() => props.active, (active) => { if (!active) stop() }, { immediate: true })
 watch(requestedFPS, () => { if (connected.value) reconnect() })
-onBeforeUnmount(() => { stop() })
+onMounted(() => document.addEventListener('fullscreenchange', syncFullscreenState))
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', syncFullscreenState)
+  stop()
+})
 </script>
 
 <template>
-  <div ref="container" class="card overflow-hidden bg-[#090d0b] dark:bg-black">
-    <div class="flex flex-wrap items-center gap-2 border-b border-white/8 px-4 py-2 text-white">
+  <div ref="container" class="card overflow-hidden bg-[#090d0b] dark:bg-black" :class="isFullscreen ? 'flex h-screen w-screen flex-col rounded-none' : ''">
+    <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/8 px-4 py-2 text-white">
       <span class="mr-2 size-1.5 rounded-full" :class="status === 'live' ? 'bg-brand-500' : status === 'error' ? 'bg-red-500' : 'bg-amber-400 animate-pulse-soft'" />
       <span class="text-xs font-medium">{{ statusText }}</span>
       <span class="hidden font-mono text-[10px] text-slate-500 sm:inline">帧 {{ frameCount }} · {{ lastFrameAt || '等待首帧' }}</span>
@@ -206,10 +240,10 @@ onBeforeUnmount(() => { stop() })
         <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="canStop" @click="start"><Play :size="14" />开启投屏</button>
         <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" @click="reconnect"><RotateCcw :size="14" />重连</button>
         <button class="btn-secondary !h-8 !border-white/8 !bg-white/5 !px-2.5 !text-xs !text-slate-200 hover:!bg-white/10" :disabled="!canStop" @click="stop"><StopCircle :size="14" />停止投屏</button>
-        <button class="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/8 hover:text-white" aria-label="全屏" @click="fullscreen"><Expand :size="16" /></button>
+        <button class="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/8 hover:text-white" :aria-label="isFullscreen ? '退出全屏' : '进入全屏'" :title="isFullscreen ? '退出全屏' : '进入全屏'" @click="toggleFullscreen"><Minimize2 v-if="isFullscreen" :size="16" /><Expand v-else :size="16" /></button>
       </div>
     </div>
-    <div class="flex flex-wrap items-center gap-3 border-b border-white/8 bg-white/[.025] px-4 py-2.5 text-xs text-slate-300">
+    <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-white/8 bg-white/[.025] px-4 py-2.5 text-xs text-slate-300">
       <SlidersHorizontal :size="15" class="text-brand-400" />
       <span class="font-medium text-slate-200">投屏参数</span>
       <label class="flex items-center gap-2">刷新帧率
@@ -221,11 +255,11 @@ onBeforeUnmount(() => { stop() })
       <span class="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-1 text-sky-200">解码：{{ screenDecoderStatusText(decoderMode) }}</span>
       <span class="text-slate-400">移动端支持单指、多指触摸与拖动控制</span>
     </div>
-    <div class="relative grid min-h-[460px] place-items-center p-5">
-      <canvas v-if="streamSize.width" ref="canvas" aria-label="设备实时屏幕" class="max-h-[680px] max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />
+    <div class="relative grid place-items-center" :class="isFullscreen ? 'min-h-0 flex-1 p-2 sm:p-4' : 'min-h-[460px] p-5'">
+      <canvas v-if="streamSize.width" ref="canvas" aria-label="设备实时屏幕" class="max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" :class="isFullscreen ? 'h-full max-h-full w-full' : 'max-h-[680px]'" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />
       <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p><p class="mt-2 text-xs">请点击“开启投屏”；画面支持点击和拖动滑动。</p></div>
     </div>
-    <div class="flex flex-wrap items-center justify-center gap-1.5 border-t border-white/8 bg-white/[.025] p-2.5">
+    <div class="flex shrink-0 flex-wrap items-center justify-center gap-1.5 border-t border-white/8 bg-white/[.025] p-2.5 pb-[max(.625rem,env(safe-area-inset-bottom))]">
       <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="返回" @click="sendAction({ type: 'key', key: 'BACK' })"><RotateCcw :size="17" /></button>
       <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="主页" @click="sendAction({ type: 'key', key: 'HOME' })"><Home :size="17" /></button>
       <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="最近任务" @click="sendAction({ type: 'key', key: 'APP_SWITCH' })"><Square :size="16" /></button>

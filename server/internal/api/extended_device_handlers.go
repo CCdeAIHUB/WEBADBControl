@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"time"
 )
 
 func (s *Server) createQRPairing(writer http.ResponseWriter, request *http.Request) {
@@ -14,7 +16,10 @@ func (s *Server) createQRPairing(writer http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) pairQRDevice(writer http.ResponseWriter, request *http.Request) {
-	result, err := s.devices.PairWirelessQR(request.Context(), request.PathValue("sessionId"))
+	ctx, cancel := context.WithTimeout(request.Context(), 105*time.Second)
+	defer cancel()
+	s.logger.Info("wireless_qr_pairing_wait_started", "traceId", writer.Header().Get("X-Request-ID"))
+	result, err := s.devices.PairWirelessQR(ctx, request.PathValue("sessionId"))
 	if err != nil {
 		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
 		return

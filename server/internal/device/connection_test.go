@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 )
@@ -26,6 +27,22 @@ func (c *connectionCaller) Call(_ context.Context, method string, params any, ta
 type scriptedConnectionCaller struct {
 	calls   [][]string
 	outputs []CommandOutput
+}
+
+type qrRetryCaller struct {
+	attempts int
+}
+
+func (c *qrRetryCaller) Call(_ context.Context, method string, _ any, target any) error {
+	if method != "adb.wifi.qr.pair" {
+		return nil
+	}
+	c.attempts++
+	if c.attempts < 3 {
+		return apperror.New("ADB_QR_PAIRING_NOT_DISCOVERED", "phone has not advertised yet", "adb.wifi.qr", true)
+	}
+	*(target.(*WirelessQRPairingResult)) = WirelessQRPairingResult{Paired: true, ServiceName: "studio-test", Endpoint: "192.168.3.20:37123"}
+	return nil
 }
 
 func (c *scriptedConnectionCaller) Call(_ context.Context, method string, params any, target any) error {
@@ -53,6 +70,18 @@ func TestPairNormalizesEndpointAndCodeBeforeADB(t *testing.T) {
 	want := []string{"pair", "192.168.3.20:37123", "123456"}
 	if len(caller.calls) != 1 || !reflect.DeepEqual(caller.calls[0], want) {
 		t.Fatalf("pair args = %#v, want %#v", caller.calls, want)
+	}
+}
+
+func TestPairWirelessQRWaitsForPhoneAdvertisement(t *testing.T) {
+	// 场景：网页展示二维码后会立即等待；手机尚未发布 mDNS 服务时必须有限重试，而不是让手机永久停在“正在配对”。
+	caller := &qrRetryCaller{}
+	result, err := NewService(caller).pairWirelessQR(context.Background(), "qr-session", time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caller.attempts != 3 || !result.Paired || result.Endpoint != "192.168.3.20:37123" {
+		t.Fatalf("attempts=%d result=%#v", caller.attempts, result)
 	}
 }
 

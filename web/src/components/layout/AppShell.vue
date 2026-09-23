@@ -1,17 +1,32 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Bot, Boxes, ChevronLeft, ClipboardList, LayoutDashboard, LogOut, Menu, Settings, Smartphone,
   Workflow, X, Zap,
 } from 'lucide-vue-next'
 import { logout } from '@/services/auth'
+import { api, toAppError } from '@/services/api'
+import { synchronizeTheme } from '@/services/theme'
 import { useUiStore } from '@/stores/ui'
+import type { AppSettings } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const isPublic = computed(() => route.meta.public === true)
+let themeSynchronized = false
+
+watch(() => route.name, async () => {
+  if (!route.name || isPublic.value || themeSynchronized) return
+  try {
+    const settings = await api<AppSettings>('/settings')
+    synchronizeTheme(settings.theme)
+    themeSynchronized = true
+  } catch (error) {
+    ui.failure(toAppError(error))
+  }
+}, { immediate: true })
 
 async function signOut() {
   try { await logout() } finally { await router.replace('/login') }
@@ -65,9 +80,6 @@ const navigation = [
           <div class="mb-1 flex items-center gap-2 text-xs font-semibold text-brand-800 dark:text-brand-300"><Boxes :size="14" /> 原生核心已连接</div>
           <p class="m-0 text-[11px] leading-5 text-brand-700/75 dark:text-brand-300/65">Rust Core · Go Service · Web UI</p>
         </div>
-		<RouterLink to="/settings" class="flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5" :class="route.path === '/settings' ? '!bg-brand-50 !text-brand-700 dark:!bg-brand-500/10 dark:!text-brand-300' : ''" @click="ui.sidebarOpen = false">
-          <Settings :size="18" />系统设置
-        </RouterLink>
         <button class="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-500/10 dark:hover:text-red-300" @click="signOut">
           <LogOut :size="18" />退出登录
         </button>

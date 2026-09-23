@@ -42,8 +42,8 @@ export function createQRPairing(): Promise<QRPairingSession> {
   return api('/wireless/qr-pairings', { method: 'POST' })
 }
 
-export function pairQRDevice(sessionId: string): Promise<QRPairingResult> {
-  return api(`/wireless/qr-pairings/${encodeURIComponent(sessionId)}/pair`, { method: 'POST' })
+export function pairQRDevice(sessionId: string, signal?: AbortSignal): Promise<QRPairingResult> {
+  return api(`/wireless/qr-pairings/${encodeURIComponent(sessionId)}/pair`, { method: 'POST', signal })
 }
 
 export function cancelQRPairing(sessionId: string): Promise<{ cancelled: boolean }> {

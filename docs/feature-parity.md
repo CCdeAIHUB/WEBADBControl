@@ -4,7 +4,7 @@
 |---|---|---|
 | 设备发现、USB/无线连接 | 工作台、设备中心 | `GET /devices`、`POST /devices/connect` |
 | 设备详情与状态 | 设备详情 / 概览 | `GET /devices/{id}/overview` |
-| 实时画面与触控 | 实时控制（兼容截图流，可显式启停、选择 1–10 FPS、点击及滑动） | WebSocket `/screen?fps=`、`POST /actions` |
+| 实时画面与触控 | scrcpy H.264 视频流（可显式启停、选择 15/30/60 FPS、连续触控） | WebSocket `/screen?fps=`、scrcpy 控制通道、`POST /actions` |
 | 返回、主页、多任务、电源、音量 | 屏幕控制栏 | 固定 ADB 参数白名单；OEM 拒绝 `INJECT_EVENTS` 时主页走 HOME Intent，返回/多任务/触摸走伴侣无障碍 |
 | 硬件与电池信息 | 硬件信息 | `getprop`、`dumpsys battery` |
 | 应用列表、启动、停止、清除、卸载、安装 | 应用管理 | `/packages/*` |
@@ -24,8 +24,8 @@
 
 原 Rust Core、Android Companion、scrcpy 4.0、QUIC 协议与许可证文件位于 `core/`，没有以 Go 逻辑替代。
 
-## 投屏链路差异（2026-09 核对）
+## 投屏链路差异（2026-09 更新）
 
-Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。当前 Rust Core 的行式 JSON IPC 仅暴露 `device.list`、`device.getCapabilities`、`device.getPermissionState` 和 `device.invoke`，没有把 H.264 视频包或 scrcpy 控制通道暴露给 Go 服务。
+Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。
 
-因此 Web 当前明确标注为“ADB 兼容截图流”，不再把轮询截图描述成 scrcpy 实时流。本轮已补齐显式开启/停止、独立帧率、后端状态、点击和滑动；要达到 Windows 的 H.264 投屏参数与低延迟，需要先给 Core 增加二进制视频流 IPC、会话生命周期与控制事件协议，再由浏览器 WebCodecs 解码（或由 Go 转封装）。在该接口完成前，前端不会展示无效的码率/分辨率控件。
+浏览器在安全上下文优先使用 WebCodecs；普通局域网 HTTP 自动使用 TinyH264 软件解码。为保证两条路径收到相同的兼容码流，Web scrcpy 会话固定请求 AVC Baseline Level 4。服务端日志记录会话尺寸、首个配置包、首个关键帧和结束时的包计数，浏览器解码异常进入系统日志。当前 Web 暂未开放 Windows 客户端的码率、分辨率和 Companion QUIC 视频源选择。

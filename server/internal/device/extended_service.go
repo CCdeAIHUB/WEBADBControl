@@ -2,9 +2,11 @@ package device
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
 )
@@ -34,14 +36,34 @@ func (s *Service) CreateWirelessPairingQR(ctx context.Context) (WirelessPairingQ
 }
 
 func (s *Service) PairWirelessQR(ctx context.Context, sessionID string) (WirelessQRPairingResult, error) {
+	return s.pairWirelessQR(ctx, sessionID, 600*time.Millisecond)
+}
+
+func (s *Service) pairWirelessQR(ctx context.Context, sessionID string, retryInterval time.Duration) (WirelessQRPairingResult, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return WirelessQRPairingResult{}, apperror.New("ADB_QR_PAIRING_SESSION_INVALID", "二维码配对会话无效", "adb.wifi.qr", true)
 	}
-	var result WirelessQRPairingResult
-	if err := s.core.Call(ctx, "adb.wifi.qr.pair", map[string]any{"sessionId": sessionID}, &result); err != nil {
-		return WirelessQRPairingResult{}, err
+	for {
+		var result WirelessQRPairingResult
+		err := s.core.Call(ctx, "adb.wifi.qr.pair", map[string]any{"sessionId": sessionID}, &result)
+		if err == nil {
+			return result, nil
+		}
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.ErrorCode != "ADB_QR_PAIRING_NOT_DISCOVERED" {
+			return WirelessQRPairingResult{}, err
+		}
+		// Android publishes the QR mDNS service only after the scanner accepts
+		// the code. Retry this one recoverable state until the HTTP deadline or
+		// client cancellation; every other Core error remains immediately visible.
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return WirelessQRPairingResult{}, apperror.Wrap("ADB_QR_PAIRING_WAIT_CANCELLED", "等待手机广播二维码配对服务已结束", "adb.wifi.qr", true, ctx.Err())
+		case <-timer.C:
+		}
 	}
-	return result, nil
 }
 
 func (s *Service) CancelWirelessQR(ctx context.Context, sessionID string) error {

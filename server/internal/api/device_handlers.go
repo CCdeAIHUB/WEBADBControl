@@ -154,13 +154,16 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 			}
 		}
 	}()
+	videoPackets := 0
+	configPackets := 0
+	keyFrames := 0
 	for {
 		packet, config, keyFrame, err := session.ReadPacket()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
-				s.logger.Info("screen_stream_closed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"))
+				s.logger.Info("screen_stream_closed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "videoPackets", videoPackets, "configPackets", configPackets, "keyFrames", keyFrames)
 			} else {
-				s.logger.Warn("screen_stream_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
+				s.logger.Warn("screen_stream_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "videoPackets", videoPackets, "configPackets", configPackets, "keyFrames", keyFrames, "error", err)
 			}
 			return
 		}
@@ -170,8 +173,19 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 		messageType := byte(0)
 		if config {
 			messageType = 1
+			configPackets++
+			if configPackets == 1 {
+				s.logger.Info("screen_codec_config_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet))
+			}
 		} else if keyFrame {
 			messageType = 2
+			keyFrames++
+			videoPackets++
+			if keyFrames == 1 {
+				s.logger.Info("screen_first_keyframe_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet))
+			}
+		} else {
+			videoPackets++
 		}
 		if err := connection.WriteMessage(websocket.BinaryMessage, append([]byte{messageType}, packet...)); err != nil {
 			s.logger.Info("screen_websocket_closed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)

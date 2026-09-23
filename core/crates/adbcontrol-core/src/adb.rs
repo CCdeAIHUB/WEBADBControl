@@ -199,6 +199,9 @@ pub fn build_scrcpy_server_args(config: &ScrcpyServerConfig) -> Result<Vec<Strin
         "video=true".to_string(),
         "control=true".to_string(),
         "video_codec=h264".to_string(),
+        // The LAN HTTP browser path uses TinyH264 when WebCodecs is unavailable.
+        // Keep scrcpy within that decoder's published AVC Baseline Level 4 ceiling.
+        "video_codec_options=profile=1,level=2048".to_string(),
         format!("max_size={}", config.max_size),
         format!("video_bit_rate={}", config.video_bit_rate),
         format!("max_fps={}", config.max_fps),
@@ -309,6 +312,8 @@ mod tests {
 
         assert_eq!(&args[..3], ["-s", "device-1", "shell"]);
         assert!(args.contains(&"scid=1234abcd".to_string()));
+        // Browser HTTP fallback uses TinyH264, whose documented ceiling is AVC Baseline Level 4.
+        assert!(args.contains(&"video_codec_options=profile=1,level=2048".to_string()));
         assert!(!args.iter().any(|argument| argument.contains('&')));
     }
 

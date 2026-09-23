@@ -9,6 +9,7 @@ import UiSwitch from '@/components/common/UiSwitch.vue'
 import AccountManagement from '@/components/settings/AccountManagement.vue'
 import { api, toAppError } from '@/services/api'
 import { getSession, updatePassword } from '@/services/auth'
+import { applyTheme, synchronizeTheme } from '@/services/theme'
 import { useUiStore } from '@/stores/ui'
 import type { AIModel, AppSettings } from '@/types/api'
 
@@ -29,10 +30,6 @@ function remoteSignature(value: AppSettings) {
   return `${value.remoteEnabled}:${value.remoteAddress}:${value.remotePort}`
 }
 
-function applyTheme(theme: AppSettings['theme']) {
-  const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
-  document.documentElement.classList.toggle('dark', dark)
-}
 watch(() => settings.value.theme, applyTheme)
 
 function addModel() {
@@ -47,7 +44,7 @@ async function load() {
     savedRemoteSignature.value = remoteSignature(settings.value)
     mustChangePassword.value = session.mustChangePassword
     sessionLoaded.value = true
-    applyTheme(settings.value.theme)
+    synchronizeTheme(settings.value.theme)
   } catch (error) {
     ui.failure(toAppError(error))
   }
@@ -57,6 +54,7 @@ async function save() {
   try {
     const remoteChanged = remoteSignature(settings.value) !== savedRemoteSignature.value
     settings.value = await api('/settings', { method: 'PUT', body: JSON.stringify(settings.value) })
+    synchronizeTheme(settings.value.theme)
     savedRemoteSignature.value = remoteSignature(settings.value)
     ui.notify('设置已保存', remoteChanged ? '界面设置已生效；网络监听设置会在服务重启后生效。' : '新的配置已立即生效。', 'success')
   } catch (error) {
