@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ChevronDown } from 'lucide-vue-next'
 
-defineProps<{ disabled?: boolean; ariaLabel?: string }>()
+defineProps<{ disabled?: boolean; ariaLabel?: string; controlClass?: string }>()
 const model = defineModel<string | undefined>()
 </script>
 
@@ -10,6 +10,7 @@ const model = defineModel<string | undefined>()
     <select
       v-model="model"
       class="field appearance-none pr-9 [color-scheme:light] dark:[color-scheme:dark]"
+      :class="controlClass"
       :disabled="disabled"
       :aria-label="ariaLabel"
     >
@@ -22,3 +23,14 @@ const model = defineModel<string | undefined>()
     />
   </div>
 </template>
+
+<style scoped>
+select.ui-select-dark {
+  color-scheme: dark;
+}
+
+select.ui-select-dark option {
+  background-color: #111916;
+  color: #e2e8f0;
+}
+</style>

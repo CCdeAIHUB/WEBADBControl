@@ -22,6 +22,7 @@ export interface ScreenDecoderCallbacks {
 
 export function screenDecoderPreference(environment: ScreenDecoderEnvironment): ScreenDecoderMode {
   if (environment.hasWebCodecs) return 'webcodecs'
+  if (!environment.isSecureContext) return 'software'
   return environment.hasMediaSource ? 'mse' : 'software'
 }
 
@@ -37,6 +38,10 @@ export function browserScreenDecoderPreference(): ScreenDecoderMode {
 export function screenDecoderStatusText(mode: ScreenDecoderMode): string {
   if (mode === 'webcodecs') return '硬件解码 · WebCodecs'
   return mode === 'mse' ? 'HTTP 兼容 · MSE 硬件播放' : 'HTTP 兼容 · 软件解码'
+}
+
+export function screenDecoderFallback(mode: ScreenDecoderMode): ScreenDecoderMode | undefined {
+  return mode === 'software' ? undefined : 'software'
 }
 
 export async function createScreenDecoder(

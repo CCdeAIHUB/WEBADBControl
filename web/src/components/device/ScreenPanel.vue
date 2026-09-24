@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Expand, Home, LoaderCircle, Minimize2, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
 import { reportClientError } from '@/services/logs'
-import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
+import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
 
@@ -90,24 +90,7 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       decoder?.dispose()
       decoder = undefined
       await nextTick()
-      const target = decoderMode.value === 'mse' ? video.value : canvas.value
-      if (!target) throw new Error('投屏显示组件尚未就绪')
-      const created = await createScreenDecoder(decoderMode.value, target, {
-        onFrame: () => {
-          if (seq !== connectionSeq) return
-          clearFirstFrameTimer()
-          frameCount.value += 1
-          lastFrameAt.value = new Date().toLocaleTimeString()
-          status.value = 'live'
-        },
-        onError: (error) => {
-          if (seq !== connectionSeq) return
-          streamError.value = `视频解码失败：${error.message}`
-          status.value = 'error'
-          clearFirstFrameTimer()
-          reportScreenError('SCREEN_DECODER_CALLBACK_FAILED', streamError.value, { decoder: decoderMode.value })
-        },
-      }, Number(requestedFPS.value))
+      const created = await createCurrentDecoder(seq)
       if (seq !== connectionSeq) { created.dispose(); return }
       decoder = created
       armFirstFrameTimer(seq)
@@ -116,10 +99,50 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
     if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
     const bytes = new Uint8Array(event.data); const kind = bytes[0]; const data = bytes.slice(1)
     if (kind === 1) {
-      await decoder.configure(data)
+      try {
+        await decoder.configure(data)
+      } catch (error) {
+        const fallback = screenDecoderFallback(decoderMode.value)
+        if (!fallback) throw error
+        const failedMode = decoderMode.value
+        decoder.dispose()
+        decoder = undefined
+        decoderMode.value = fallback
+        await nextTick()
+        const replacement = await createCurrentDecoder(seq)
+        if (seq !== connectionSeq) { replacement.dispose(); return }
+        decoder = replacement
+        await replacement.configure(data)
+        reportScreenError('SCREEN_DECODER_FALLBACK', `${screenDecoderStatusText(failedMode)} 初始化失败，已自动切换为软件视频解码`, {
+          decoder: failedMode,
+          fallback,
+          reason: error instanceof Error ? error.message : String(error),
+        })
+      }
       return
     }
     await decoder.decode(data, kind === 2)
+}
+
+async function createCurrentDecoder(seq: number) {
+  const target = decoderMode.value === 'mse' ? video.value : canvas.value
+  if (!target) throw new Error('投屏显示组件尚未就绪')
+  return createScreenDecoder(decoderMode.value, target, {
+    onFrame: () => {
+      if (seq !== connectionSeq) return
+      clearFirstFrameTimer()
+      frameCount.value += 1
+      lastFrameAt.value = new Date().toLocaleTimeString()
+      status.value = 'live'
+    },
+    onError: (error) => {
+      if (seq !== connectionSeq) return
+      streamError.value = `视频解码失败：${error.message}`
+      status.value = 'error'
+      clearFirstFrameTimer()
+      reportScreenError('SCREEN_DECODER_CALLBACK_FAILED', streamError.value, { decoder: decoderMode.value })
+    },
+  }, Number(requestedFPS.value))
 }
 
 function stop() {
@@ -271,7 +294,7 @@ onBeforeUnmount(() => {
       <SlidersHorizontal :size="15" class="text-brand-400" />
       <span class="font-medium text-slate-200">投屏参数</span>
       <label class="flex items-center gap-2">刷新帧率
-        <UiSelect v-model="requestedFPS" class="!h-8 !w-32 !border-white/10 !bg-white/5 !text-xs !text-slate-100" aria-label="投屏刷新帧率">
+        <UiSelect v-model="requestedFPS" class="w-32" control-class="ui-select-dark !h-8 !border-white/10 !bg-[#111916] !text-xs !text-slate-100" aria-label="投屏刷新帧率">
           <option value="15">15 FPS · 省流</option><option value="30">30 FPS · 流畅</option><option value="60">60 FPS · 高刷</option>
         </UiSelect>
       </label>

@@ -33,4 +33,11 @@ describe('screen fullscreen controls', () => {
     expect(document.exitFullscreen).toHaveBeenCalledOnce()
     expect(wrapper.find('button[aria-label="进入全屏"]').exists()).toBe(true)
   })
+
+  it('keeps the frame-rate control readable inside the dark screen panel', () => {
+    const wrapper = mount(ScreenPanel, { props: { deviceId: 'phone', active: false } })
+    const select = wrapper.get('select[aria-label="投屏刷新帧率"]')
+    expect(select.classes()).toContain('ui-select-dark')
+    expect(select.classes()).toContain('!text-slate-100')
+  })
 })
