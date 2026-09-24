@@ -26,6 +26,7 @@ import android.os.IBinder;
 import android.view.Surface;
 
 import java.io.IOException;
+import java.util.Locale;
 
 public class ScreenCapture extends SurfaceCapture {
 
@@ -128,30 +129,46 @@ public class ScreenCapture extends SurfaceCapture {
             inputSize = videoSize;
         }
 
-        try {
-            virtualDisplay = ServiceManager.getDisplayManager()
-                    .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
-            Ln.d("Display: using DisplayManager API");
-        } catch (Exception displayManagerException) {
-            if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase().startsWith("quest")) {
-                // Workaround for buggy createVirtualDisplay on Quest
-                try {
-                    virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
-                } catch (ReflectiveOperationException e) {
-                    Ln.e("Could not create VirtualDisplay", e);
+        Exception surfaceControlException = null;
+        if (shouldPreferSurfaceControl(Build.VERSION.SDK_INT, Build.MANUFACTURER, Build.BRAND)) {
+            try {
+                startSurfaceControlCapture(surface, inputSize);
+                Ln.i("Display: using SurfaceControl API first for Android 16 Xiaomi compatibility");
+            } catch (Exception e) {
+                if (display != null) {
+                    SurfaceControl.destroyDisplay(display);
+                    display = null;
                 }
-            } else {
-                try {
-                    display = createDisplay();
+                surfaceControlException = e;
+                Ln.w("SurfaceControl compatibility capture failed, falling back to DisplayManager", e);
+            }
+        }
 
-                    Size deviceSize = displayInfo.getSize();
-                    int layerStack = displayInfo.getLayerStack();
-                    setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
-                    Ln.d("Display: using SurfaceControl API");
-                } catch (Exception surfaceControlException) {
-                    Ln.e("Could not create display using DisplayManager", displayManagerException);
-                    Ln.e("Could not create display using SurfaceControl", surfaceControlException);
-                    throw new AssertionError("Could not create display");
+        if (display == null) {
+            try {
+                virtualDisplay = ServiceManager.getDisplayManager()
+                        .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
+                Ln.d("Display: using DisplayManager API");
+            } catch (Exception displayManagerException) {
+                if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase().startsWith("quest")) {
+                    // Workaround for buggy createVirtualDisplay on Quest
+                    try {
+                        virtualDisplay = (VirtualDisplay) VirtualDisplay.class.getDeclaredConstructors()[0].newInstance(null, null, null, surface);
+                    } catch (ReflectiveOperationException e) {
+                        Ln.e("Could not create VirtualDisplay", e);
+                    }
+                } else {
+                    try {
+                        startSurfaceControlCapture(surface, inputSize);
+                        Ln.d("Display: using SurfaceControl API");
+                    } catch (Exception fallbackSurfaceControlException) {
+                        Ln.e("Could not create display using DisplayManager", displayManagerException);
+                        if (surfaceControlException != null) {
+                            Ln.e("Initial SurfaceControl compatibility capture also failed", surfaceControlException);
+                        }
+                        Ln.e("Could not create display using SurfaceControl", fallbackSurfaceControlException);
+                        throw new AssertionError("Could not create display");
+                    }
                 }
             }
         }
@@ -212,6 +229,28 @@ public class ScreenCapture extends SurfaceCapture {
         boolean secure = Build.VERSION.SDK_INT < AndroidVersions.API_30_ANDROID_11 || (Build.VERSION.SDK_INT == AndroidVersions.API_30_ANDROID_11
                 && !"S".equals(Build.VERSION.CODENAME));
         return SurfaceControl.createDisplay("scrcpy", secure);
+    }
+
+    static boolean shouldPreferSurfaceControl(int sdkInt, String manufacturer, String brand) {
+        if (sdkInt < 36) {
+            return false;
+        }
+
+        String normalizedManufacturer = manufacturer == null ? "" : manufacturer.toLowerCase(Locale.ROOT);
+        String normalizedBrand = brand == null ? "" : brand.toLowerCase(Locale.ROOT);
+        return isXiaomiFamily(normalizedManufacturer) || isXiaomiFamily(normalizedBrand);
+    }
+
+    private static boolean isXiaomiFamily(String value) {
+        return value.contains("xiaomi") || value.contains("redmi") || value.contains("poco");
+    }
+
+    private void startSurfaceControlCapture(Surface surface, Size inputSize) throws Exception {
+        display = createDisplay();
+
+        Size deviceSize = displayInfo.getSize();
+        int layerStack = displayInfo.getLayerStack();
+        setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
     }
 
     private static void setDisplaySurface(IBinder display, Surface surface, Rect deviceRect, Rect displayRect, int layerStack) {
