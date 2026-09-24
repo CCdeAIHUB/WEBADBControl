@@ -1,7 +1,10 @@
-export type ScreenDecoderMode = 'webcodecs' | 'software'
+import JMuxer from 'jmuxer'
+
+export type ScreenDecoderMode = 'webcodecs' | 'mse' | 'software'
 
 export interface ScreenDecoderEnvironment {
   hasWebCodecs: boolean
+  hasMediaSource: boolean
   isSecureContext: boolean
 }
 
@@ -18,27 +21,142 @@ export interface ScreenDecoderCallbacks {
 }
 
 export function screenDecoderPreference(environment: ScreenDecoderEnvironment): ScreenDecoderMode {
-  return environment.hasWebCodecs ? 'webcodecs' : 'software'
+  if (environment.hasWebCodecs) return 'webcodecs'
+  return environment.hasMediaSource ? 'mse' : 'software'
 }
 
 export function browserScreenDecoderPreference(): ScreenDecoderMode {
+  const browserWindow = window as Window & { WebKitMediaSource?: typeof MediaSource; ManagedMediaSource?: typeof MediaSource }
   return screenDecoderPreference({
     hasWebCodecs: 'VideoDecoder' in window && 'EncodedVideoChunk' in window,
+    hasMediaSource: Boolean(window.MediaSource || browserWindow.WebKitMediaSource || browserWindow.ManagedMediaSource),
     isSecureContext: window.isSecureContext,
   })
 }
 
 export function screenDecoderStatusText(mode: ScreenDecoderMode): string {
-  return mode === 'webcodecs' ? '硬件解码 · WebCodecs' : 'HTTP 兼容 · 软件解码'
+  if (mode === 'webcodecs') return '硬件解码 · WebCodecs'
+  return mode === 'mse' ? 'HTTP 兼容 · MSE 硬件播放' : 'HTTP 兼容 · 软件解码'
 }
 
 export async function createScreenDecoder(
   mode: ScreenDecoderMode,
-  canvas: HTMLCanvasElement,
+  target: HTMLCanvasElement | HTMLVideoElement,
   callbacks: ScreenDecoderCallbacks,
+  fps = 30,
 ): Promise<ScreenDecoder> {
-  if (mode === 'webcodecs') return new WebCodecsScreenDecoder(canvas, callbacks)
-  return SoftwareScreenDecoder.create(canvas, callbacks)
+  if (mode === 'mse') {
+    if (!(target instanceof HTMLVideoElement)) throw new Error('MSE 投屏缺少视频播放元素')
+    return new MseScreenDecoder(target, callbacks, fps)
+  }
+  if (!(target instanceof HTMLCanvasElement)) throw new Error('投屏缺少画布元素')
+  if (mode === 'webcodecs') return new WebCodecsScreenDecoder(target, callbacks)
+  return SoftwareScreenDecoder.create(target, callbacks)
+}
+
+type VideoFrameCallback = (now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => void
+type VideoWithFrameCallback = HTMLVideoElement & {
+  requestVideoFrameCallback?: (callback: VideoFrameCallback) => number
+  cancelVideoFrameCallback?: (handle: number) => void
+}
+
+class MseScreenDecoder implements ScreenDecoder {
+  readonly mode = 'mse' as const
+  private readonly muxer: JMuxer
+  private codecConfig?: Uint8Array
+  private disposed = false
+  private videoFrameHandle?: number
+  private mseReady = false
+  private readonly readyPromise: Promise<void>
+  private resolveReady!: () => void
+
+  constructor(
+    private readonly video: HTMLVideoElement,
+    private readonly callbacks: ScreenDecoderCallbacks,
+    private readonly fps: number,
+  ) {
+    this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve })
+    const options: JMuxer.Options & {
+      videoCodec: 'H264'
+      onUnsupportedCodec: (codec: string) => void
+    } = {
+      node: video,
+      mode: 'video',
+      videoCodec: 'H264',
+      fps,
+      flushingTime: 0,
+      maxDelay: 120,
+      clearBuffer: true,
+      onReady: () => {
+        this.mseReady = true
+        this.resolveReady()
+      },
+      onError: (error) => callbacks.onError(new Error(`MSE 缓冲区错误：${formatUnknownError(error)}`)),
+      onUnsupportedCodec: (codec) => callbacks.onError(new Error(`浏览器不支持设备视频编码：${codec}`)),
+    }
+    this.muxer = new JMuxer(options)
+    this.observeFrames()
+  }
+
+  async configure(data: Uint8Array) {
+    this.codecConfig = data.slice()
+    await this.waitUntilReady()
+  }
+
+  async decode(data: Uint8Array, keyframe: boolean) {
+    await this.waitUntilReady()
+    let packet = data
+    if (keyframe && this.codecConfig) {
+      packet = new Uint8Array(this.codecConfig.length + data.length)
+      packet.set(this.codecConfig)
+      packet.set(data, this.codecConfig.length)
+      this.codecConfig = undefined
+    }
+    this.muxer.feed({
+      video: packet,
+      duration: Math.max(1, Math.round(1000 / this.fps)),
+      isLastVideoFrameComplete: true,
+    } as JMuxer.Feeder & { isLastVideoFrameComplete: boolean })
+    void this.video.play().catch(() => undefined)
+  }
+
+  dispose() {
+    this.disposed = true
+    const video = this.video as VideoWithFrameCallback
+    if (this.videoFrameHandle !== undefined) video.cancelVideoFrameCallback?.(this.videoFrameHandle)
+    this.video.removeEventListener('timeupdate', this.handleFallbackFrame)
+    this.muxer.destroy()
+    this.video.pause()
+    this.video.removeAttribute('src')
+    this.video.load()
+    this.codecConfig = undefined
+  }
+
+  private async waitUntilReady() {
+    if (this.mseReady) return
+    await Promise.race([
+      this.readyPromise,
+      new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('MSE 播放器初始化超时')), 5000)),
+    ])
+  }
+
+  private observeFrames() {
+    const video = this.video as VideoWithFrameCallback
+    if (!video.requestVideoFrameCallback) {
+      this.video.addEventListener('timeupdate', this.handleFallbackFrame)
+      return
+    }
+    const observe: VideoFrameCallback = () => {
+      if (this.disposed) return
+      this.callbacks.onFrame()
+      this.videoFrameHandle = video.requestVideoFrameCallback!(observe)
+    }
+    this.videoFrameHandle = video.requestVideoFrameCallback(observe)
+  }
+
+  private handleFallbackFrame = () => {
+    if (!this.disposed) this.callbacks.onFrame()
+  }
 }
 
 class WebCodecsScreenDecoder implements ScreenDecoder {
@@ -146,4 +264,10 @@ function codecName(config: Uint8Array) {
     return `avc1.${[config[offset + 1], config[offset + 2], config[offset + 3]].map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`
   }
   return 'avc1.42E01E'
+}
+
+function formatUnknownError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try { return JSON.stringify(error) } catch { return String(error) }
 }

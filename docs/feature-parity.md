@@ -28,4 +28,4 @@
 
 Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。
 
-浏览器在安全上下文优先使用 WebCodecs；普通局域网 HTTP 自动使用 TinyH264 软件解码。为保证两条路径收到相同的兼容码流，Web scrcpy 会话固定请求 AVC Baseline Level 4。服务端日志记录会话尺寸、首个配置包、首个关键帧和结束时的包计数，浏览器解码异常进入系统日志。当前 Web 暂未开放 Windows 客户端的码率、分辨率和 Companion QUIC 视频源选择。
+浏览器在安全上下文优先使用 WebCodecs；普通局域网 HTTP 自动通过 Media Source Extensions 将 scrcpy H.264 码流封装为 fMP4 并使用浏览器硬件播放，不要求 HTTPS。仅在浏览器不支持 MSE 时才使用 TinyH264 软件解码兜底。为保证各路径收到相同的兼容码流，Web scrcpy 会话固定请求 AVC Baseline Level 4。服务端日志记录会话尺寸、首个配置包、首个关键帧和结束时的包计数；浏览器解码异常及 8 秒首帧超时进入系统日志。当前 Web 暂未开放 Windows 客户端的码率、分辨率和 Companion QUIC 视频源选择。

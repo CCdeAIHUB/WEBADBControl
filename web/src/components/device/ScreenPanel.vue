@@ -10,6 +10,7 @@ import UiSelect from '@/components/common/UiSelect.vue'
 const props = defineProps<{ deviceId: string; active: boolean }>()
 const ui = useUiStore()
 const canvas = ref<HTMLCanvasElement>()
+const video = ref<HTMLVideoElement>()
 const status = ref<'idle' | 'connecting' | 'live' | 'error'>('idle')
 const frameCount = ref(0)
 const lastFrameAt = ref('')
@@ -29,6 +30,7 @@ let intentionalClose = false
 let connectionSeq = 0
 let actionInFlight = false
 let lastActionAt = 0
+let firstFrameTimer: number | undefined
 
 const statusText = computed(() => streamError.value || ({ idle: '投屏未开启', connecting: '正在启动实时投屏', live: '实时投屏运行中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
@@ -38,6 +40,8 @@ function start() {
   decoderMode.value = browserScreenDecoderPreference()
   status.value = 'connecting'
   streamError.value = ''
+  frameCount.value = 0
+  lastFrameAt.value = ''
   connected.value = true
   intentionalClose = false
   const seq = connectionSeq + 1
@@ -86,11 +90,12 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       decoder?.dispose()
       decoder = undefined
       await nextTick()
-      const target = canvas.value
-      if (!target) throw new Error('投屏画布尚未就绪')
+      const target = decoderMode.value === 'mse' ? video.value : canvas.value
+      if (!target) throw new Error('投屏显示组件尚未就绪')
       const created = await createScreenDecoder(decoderMode.value, target, {
         onFrame: () => {
           if (seq !== connectionSeq) return
+          clearFirstFrameTimer()
           frameCount.value += 1
           lastFrameAt.value = new Date().toLocaleTimeString()
           status.value = 'live'
@@ -99,11 +104,13 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
           if (seq !== connectionSeq) return
           streamError.value = `视频解码失败：${error.message}`
           status.value = 'error'
+          clearFirstFrameTimer()
           reportScreenError('SCREEN_DECODER_CALLBACK_FAILED', streamError.value, { decoder: decoderMode.value })
         },
-      })
+      }, Number(requestedFPS.value))
       if (seq !== connectionSeq) { created.dispose(); return }
       decoder = created
+      armFirstFrameTimer(seq)
       return
     }
     if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
@@ -120,6 +127,7 @@ function stop() {
   intentionalClose = true
   socket?.close()
   decoder?.dispose(); decoder = undefined
+  clearFirstFrameTimer()
   decoderPacketQueue = Promise.resolve()
   activePointers.clear(); lastTouchMoveAt.clear()
   socket = undefined
@@ -144,7 +152,7 @@ async function sendAction(payload: Record<string, unknown>) {
 }
 
 function imagePoint(event: PointerEvent) {
-  const image = event.currentTarget as HTMLCanvasElement
+  const image = event.currentTarget as HTMLElement
   const rect = image.getBoundingClientRect()
   return {
     x: Math.max(0, Math.min(streamSize.value.width - 1, Math.round((event.clientX - rect.left) * streamSize.value.width / rect.width))),
@@ -206,6 +214,22 @@ function reportScreenError(errorCode: string, message: string, details: Record<s
   })
 }
 
+function armFirstFrameTimer(seq: number) {
+  clearFirstFrameTimer()
+  firstFrameTimer = window.setTimeout(() => {
+    if (seq !== connectionSeq || frameCount.value > 0 || status.value === 'idle') return
+    streamError.value = `已收到视频流，但 ${screenDecoderStatusText(decoderMode.value)} 在 8 秒内未显示首帧`
+    status.value = 'error'
+    reportScreenError('SCREEN_FIRST_FRAME_TIMEOUT', streamError.value, { decoder: decoderMode.value })
+    ui.failure(toAppError({ errorCode: 'SCREEN_FIRST_FRAME_TIMEOUT', message: streamError.value, module: 'device.screen' }))
+  }, 8000)
+}
+
+function clearFirstFrameTimer() {
+  if (firstFrameTimer !== undefined) window.clearTimeout(firstFrameTimer)
+  firstFrameTimer = undefined
+}
+
 function syncFullscreenState() {
   isFullscreen.value = document.fullscreenElement === container.value
 }
@@ -256,7 +280,8 @@ onBeforeUnmount(() => {
       <span class="text-slate-400">移动端支持单指、多指触摸与拖动控制</span>
     </div>
     <div class="relative grid place-items-center" :class="isFullscreen ? 'min-h-0 flex-1 p-2 sm:p-4' : 'min-h-[460px] p-5'">
-      <canvas v-if="streamSize.width" ref="canvas" aria-label="设备实时屏幕" class="max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" :class="isFullscreen ? 'h-full max-h-full w-full' : 'max-h-[680px]'" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />
+      <video v-if="streamSize.width && decoderMode === 'mse'" ref="video" aria-label="设备实时屏幕" autoplay muted playsinline disablepictureinpicture class="max-w-full touch-none cursor-crosshair select-none rounded-md bg-black object-contain shadow-2xl" :class="isFullscreen ? 'h-full max-h-full w-full' : 'max-h-[680px]'" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />
+      <canvas v-else-if="streamSize.width" ref="canvas" aria-label="设备实时屏幕" class="max-w-full touch-none cursor-crosshair select-none rounded-md object-contain shadow-2xl" :class="isFullscreen ? 'h-full max-h-full w-full' : 'max-h-[680px]'" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />
       <div v-else class="text-center text-slate-500"><LoaderCircle v-if="status === 'connecting'" :size="28" class="mx-auto mb-3 animate-spin text-brand-500" /><MousePointer2 v-else :size="28" class="mx-auto mb-3" /><p class="m-0 text-sm">{{ statusText }}</p><p class="mt-2 text-xs">请点击“开启投屏”；画面支持点击和拖动滑动。</p></div>
     </div>
     <div class="flex shrink-0 flex-wrap items-center justify-center gap-1.5 border-t border-white/8 bg-white/[.025] p-2.5 pb-[max(.625rem,env(safe-area-inset-bottom))]">

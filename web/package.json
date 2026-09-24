@@ -13,6 +13,7 @@
     "@tailwindcss/vite": "^4.1.12",
     "@vueuse/core": "^13.6.0",
     "@yume-chan/scrcpy-decoder-tinyh264": "2.1.0",
+    "jmuxer": "2.1.1",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^3.0.3",
     "tailwindcss": "^4.1.12",
@@ -20,6 +21,7 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@types/jmuxer": "^2.0.7",
     "@types/node": "^26.2.0",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/test-utils": "^2.4.6",

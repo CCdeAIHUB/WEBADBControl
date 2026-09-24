@@ -3,15 +3,20 @@ import { screenDecoderPreference, screenDecoderStatusText } from './screenDecode
 
 describe('screen decoder selection', () => {
   it('uses WebCodecs when the API is available', () => {
-    expect(screenDecoderPreference({ hasWebCodecs: true, isSecureContext: true })).toBe('webcodecs')
+    expect(screenDecoderPreference({ hasWebCodecs: true, hasMediaSource: true, isSecureContext: true })).toBe('webcodecs')
   })
 
-  it('uses the software decoder for an ordinary LAN HTTP page', () => {
-    expect(screenDecoderPreference({ hasWebCodecs: false, isSecureContext: false })).toBe('software')
+  it('uses MSE hardware playback for an ordinary LAN HTTP page', () => {
+    expect(screenDecoderPreference({ hasWebCodecs: false, hasMediaSource: true, isSecureContext: false })).toBe('mse')
+    expect(screenDecoderStatusText('mse')).toContain('HTTP')
+  })
+
+  it('keeps the software decoder as the final compatibility fallback', () => {
+    expect(screenDecoderPreference({ hasWebCodecs: false, hasMediaSource: false, isSecureContext: false })).toBe('software')
     expect(screenDecoderStatusText('software')).toContain('HTTP')
   })
 
   it('also falls back when a secure browser lacks WebCodecs', () => {
-    expect(screenDecoderPreference({ hasWebCodecs: false, isSecureContext: true })).toBe('software')
+    expect(screenDecoderPreference({ hasWebCodecs: false, hasMediaSource: true, isSecureContext: true })).toBe('mse')
   })
 })
