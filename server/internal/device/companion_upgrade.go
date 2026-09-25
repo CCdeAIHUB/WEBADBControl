@@ -15,6 +15,8 @@ import (
 
 const (
 	CompanionUpgradeReady     = "ready"
+	CompanionUpgradeMissing   = "missing"
+	CompanionUpgradeOutdated  = "outdated"
 	CompanionUpgradeInstalled = "installed"
 	CompanionUpgradeUpdated   = "updated"
 )
@@ -52,11 +54,31 @@ func (r CompanionRequirement) configured() bool {
 }
 
 func (s *Service) ProbeCompanionPackage(ctx context.Context, deviceID string) (CompanionPackageInfo, error) {
+	// `dumpsys package` retains records after a user uninstalls an app and marks
+	// them installed=false. The normal package list is the source of truth for
+	// whether the package is currently installed for the active Android user.
+	listed, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "pm", "list", "packages", companionPackageName))
+	if err != nil {
+		return CompanionPackageInfo{}, err
+	}
+	if !packageListContains(listed.Stdout, companionPackageName) {
+		return CompanionPackageInfo{}, nil
+	}
 	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "dumpsys", "package", companionPackageName))
 	if err != nil {
 		return CompanionPackageInfo{}, err
 	}
 	return parseCompanionPackageInfo(output.Stdout), nil
+}
+
+func packageListContains(output, packageName string) bool {
+	want := "package:" + packageName
+	for _, line := range strings.Split(strings.ReplaceAll(output, "\r", ""), "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCompanionPackageInfo(output string) CompanionPackageInfo {
@@ -75,21 +97,70 @@ func parseCompanionPackageInfo(output string) CompanionPackageInfo {
 }
 
 func (s *Service) EnsureConfiguredCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
-	return s.ensureCompanion(ctx, deviceID, trigger, false)
+	result, err := s.CheckConfiguredCompanion(ctx, deviceID, trigger)
+	if err != nil {
+		return CompanionUpgradeResult{}, err
+	}
+	switch result.State {
+	case CompanionUpgradeMissing:
+		return result, apperror.New("COMPANION_INSTALL_REQUIRED", "当前功能需要安装 ADBControl Companion", "companion.requirement", true).
+			WithSuggestion("确认后可使用服务端内置 APK 进行安装")
+	case CompanionUpgradeOutdated:
+		return result, apperror.New("COMPANION_UPGRADE_REQUIRED", "当前伴侣版本不支持此功能", "companion.requirement", true).
+			WithSuggestion(fmt.Sprintf("需要 versionCode %d，设备当前为 %d；确认后可安全覆盖安装", result.RequiredVersionCode, result.InstalledVersionCode))
+	default:
+		return result, nil
+	}
 }
 
 func (s *Service) ForceInstallConfiguredCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
-	return s.ensureCompanion(ctx, deviceID, trigger, true)
+	return s.installCompanion(ctx, deviceID, trigger)
 }
 
-func (s *Service) ensureCompanion(ctx context.Context, deviceID, trigger string, force bool) (CompanionUpgradeResult, error) {
+func (s *Service) CheckConfiguredCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
 	requirement := s.companionRequirement
 	if !requirement.configured() {
 		return CompanionUpgradeResult{State: CompanionUpgradeReady}, nil
 	}
+	current, err := s.ProbeCompanionPackage(ctx, deviceID)
+	if err != nil {
+		return CompanionUpgradeResult{}, err
+	}
+	result := companionUpgradeResult(requirement, current)
+	if !current.Installed {
+		result.State = CompanionUpgradeMissing
+		s.logCompanionUpgrade("companion_requirement_missing", deviceID, trigger, result, 0, nil)
+		return result, nil
+	}
+	if current.VersionCode < requirement.VersionCode {
+		result.State = CompanionUpgradeOutdated
+		s.logCompanionUpgrade("companion_requirement_outdated", deviceID, trigger, result, 0, nil)
+		return result, nil
+	}
+	s.logCompanionUpgrade("companion_requirement_satisfied", deviceID, trigger, result, 0, nil)
+	return result, nil
+}
 
-	// Capabilities, permissions and screen startup may arrive concurrently from the UI.
-	// Serialize per device and always probe again under the lock so only one install -r runs.
+func companionUpgradeResult(requirement CompanionRequirement, current CompanionPackageInfo) CompanionUpgradeResult {
+	return CompanionUpgradeResult{
+		State:                CompanionUpgradeReady,
+		PreviousVersionCode:  current.VersionCode,
+		PreviousVersionName:  current.VersionName,
+		InstalledVersionCode: current.VersionCode,
+		InstalledVersionName: current.VersionName,
+		RequiredVersionCode:  requirement.VersionCode,
+		RequiredVersionName:  requirement.VersionName,
+	}
+}
+
+func (s *Service) installCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
+	requirement := s.companionRequirement
+	if !requirement.configured() {
+		return CompanionUpgradeResult{}, apperror.New("COMPANION_REQUIREMENT_NOT_CONFIGURED", "服务器未配置伴侣版本能力基线", "companion.upgrade", false)
+	}
+
+	// A user may click confirm more than once while requests are in flight. Serialize
+	// per device and probe again under the lock before the explicit install.
 	lockValue, _ := s.companionUpgradeLocks.LoadOrStore(deviceID, &sync.Mutex{})
 	lock := lockValue.(*sync.Mutex)
 	lock.Lock()
@@ -100,19 +171,7 @@ func (s *Service) ensureCompanion(ctx context.Context, deviceID, trigger string,
 	if err != nil {
 		return CompanionUpgradeResult{}, err
 	}
-	result := CompanionUpgradeResult{
-		State:                CompanionUpgradeReady,
-		PreviousVersionCode:  current.VersionCode,
-		PreviousVersionName:  current.VersionName,
-		InstalledVersionCode: current.VersionCode,
-		InstalledVersionName: current.VersionName,
-		RequiredVersionCode:  requirement.VersionCode,
-		RequiredVersionName:  requirement.VersionName,
-	}
-	if !force && current.Installed && current.VersionCode >= requirement.VersionCode {
-		s.logCompanionUpgrade("companion_requirement_satisfied", deviceID, trigger, result, time.Since(started), nil)
-		return result, nil
-	}
+	result := companionUpgradeResult(requirement, current)
 	if _, err := os.Stat(requirement.APKPath); err != nil {
 		upgradeErr := apperror.Wrap("COMPANION_APK_MISSING", "服务器未打包 Android 伴侣应用", "companion.upgrade", false, err)
 		s.logCompanionUpgrade("companion_upgrade_failed", deviceID, trigger, result, time.Since(started), upgradeErr)
@@ -154,8 +213,8 @@ func companionInstallError(output CommandOutput, cause error) error {
 	detail := strings.ToLower(strings.TrimSpace(output.Stderr + "\n" + output.Stdout))
 	switch {
 	case strings.Contains(detail, "install_failed_update_incompatible") || strings.Contains(detail, "signatures do not match"):
-		return apperror.Wrap("COMPANION_SIGNATURE_MISMATCH", "设备上的伴侣签名与服务端安装包不一致", "companion.upgrade", false, cause).
-			WithSuggestion("为保护伴侣数据，系统不会自动卸载；请确认使用同一正式签名的 APK")
+		return apperror.Wrap("COMPANION_SIGNATURE_MISMATCH", "Android 拒绝覆盖：设备中仍存在不同签名的伴侣应用", "companion.upgrade", false, cause).
+			WithSuggestion("这不是普通版本差异。请在当前用户和工作资料中完整卸载旧伴侣后重试；为保护数据，系统不会自动卸载")
 	case strings.Contains(detail, "device offline") || strings.Contains(detail, "device not found"):
 		return apperror.Wrap("COMPANION_UPGRADE_DEVICE_OFFLINE", "伴侣升级时设备已离线", "companion.upgrade", true, cause).
 			WithSuggestion("请保持无线调试页面开启并重新连接后重试")

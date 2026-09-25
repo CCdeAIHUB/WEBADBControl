@@ -54,6 +54,8 @@ func (c *companionStatusCaller) Call(_ context.Context, method string, params an
 	output := CommandOutput{}
 	joined := strings.Join(args, " ")
 	switch {
+	case strings.Contains(joined, "pm list packages "+companionPackageName):
+		output.Stdout = "package:" + companionPackageName + "\n"
 	case strings.Contains(joined, "dumpsys package com.adbcontrol.companion"):
 		output.Stdout = "Packages:\n  Package [com.adbcontrol.companion]:\n    versionCode=13 minSdk=29 targetSdk=36\n    versionName=0.13.0\n"
 	case strings.Contains(joined, "cat /sdcard/Android/data/com.adbcontrol.companion/files/command-results/"):
@@ -73,8 +75,8 @@ func TestCompanionStatusUsesSideEffectFreeADBProbe(t *testing.T) {
 	if !status.Installed || !status.ADBResponsive || status.State != "adb-responsive" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
-	if len(caller.calls) != 3 {
-		t.Fatalf("calls = %#v, want package check, broadcast and result read", caller.calls)
+	if len(caller.calls) != 4 {
+		t.Fatalf("calls = %#v, want installed check, version check, broadcast and result read", caller.calls)
 	}
 	for _, call := range caller.calls {
 		joined := strings.Join(call, " ")
@@ -82,7 +84,7 @@ func TestCompanionStatusUsesSideEffectFreeADBProbe(t *testing.T) {
 			t.Fatalf("status probe must not foreground app: %#v", caller.calls)
 		}
 	}
-	wantPrefix := []string{"-s", "SM-F926N", "shell", "dumpsys", "package", "com.adbcontrol.companion"}
+	wantPrefix := []string{"-s", "SM-F926N", "shell", "pm", "list", "packages", "com.adbcontrol.companion"}
 	if !reflect.DeepEqual(caller.calls[0], wantPrefix) {
 		t.Fatalf("package check = %#v, want %#v", caller.calls[0], wantPrefix)
 	}

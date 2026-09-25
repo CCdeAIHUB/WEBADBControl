@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/stores/ui', () => ({ useUiStore: () => ({ failure: vi.fn() }) }))
+const apiMock = vi.fn()
+const notifyMock = vi.fn()
+vi.mock('@/services/api', () => ({
+  api: (...args: unknown[]) => apiMock(...args),
+  toAppError: (error: any) => error,
+}))
+vi.mock('@/stores/ui', () => ({ useUiStore: () => ({ failure: vi.fn(), notify: notifyMock }) }))
+vi.mock('@/services/logs', () => ({ reportClientError: vi.fn() }))
 
 import ScreenPanel from './ScreenPanel.vue'
 
@@ -11,6 +18,8 @@ describe('screen fullscreen controls', () => {
   let fullscreenElement: Element | null
 
   beforeEach(() => {
+	apiMock.mockReset()
+	notifyMock.mockReset()
     fullscreenElement = null
     Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement })
     HTMLElement.prototype.requestFullscreen = vi.fn(async function (this: HTMLElement) {
@@ -39,5 +48,31 @@ describe('screen fullscreen controls', () => {
     const select = wrapper.get('select[aria-label="投屏刷新帧率"]')
     expect(select.classes()).toContain('ui-select-dark')
     expect(select.classes()).toContain('!text-slate-100')
+  })
+
+  it('asks before installing companion for a denied adb control fallback', async () => {
+    // 场景：直接 ADB 控制被设备拒绝且需要伴侣时，必须经内建确认框授权后才安装并重试。
+    let actionAttempts = 0
+    apiMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/actions') && actionAttempts++ === 0) {
+        throw { errorCode: 'COMPANION_INSTALL_REQUIRED', message: '需要伴侣', module: 'companion.requirement', recoverable: true, traceId: 'test' }
+      }
+      if (path.endsWith('/companion/install')) return { state: 'installed', installedVersionCode: 13, installedVersionName: '0.13.0' }
+      return { accepted: true }
+    })
+    const wrapper = mount(ScreenPanel, { props: { deviceId: 'phone', active: false } })
+
+    await wrapper.get('button[title="返回"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('该控制操作需要伴侣能力支持')
+    expect(apiMock.mock.calls.map(call => call[0])).not.toContain('/devices/phone/companion/install')
+
+    const confirm = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('安装 / 覆盖安装'))
+    ;(confirm as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(apiMock.mock.calls.map(call => call[0])).toContain('/devices/phone/companion/install')
+    expect(actionAttempts).toBe(2)
+    wrapper.unmount()
   })
 })

@@ -484,7 +484,7 @@ func (s *Server) installCompanion(writer http.ResponseWriter, request *http.Requ
 }
 
 func (s *Server) ensureCompanion(writer http.ResponseWriter, request *http.Request) {
-	result, err := s.devices.EnsureConfiguredCompanion(request.Context(), request.PathValue("id"), "web-preflight")
+	result, err := s.devices.CheckConfiguredCompanion(request.Context(), request.PathValue("id"), "web-preflight")
 	if err != nil {
 		writeError(writer, companionUpgradeHTTPStatus(err), err)
 		return

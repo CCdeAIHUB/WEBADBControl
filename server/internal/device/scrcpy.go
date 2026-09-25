@@ -51,9 +51,6 @@ type scrcpyStartResult struct {
 
 func (s *Service) StartScrcpy(ctx context.Context, deviceID string, options ScrcpyOptions) (*ScrcpySession, error) {
 	options = normalizeScrcpyOptions(options)
-	if _, err := s.EnsureConfiguredCompanion(ctx, deviceID, "screen"); err != nil {
-		return nil, err
-	}
 	apkPath, err := s.companionAPKPath(ctx, deviceID)
 	if err != nil {
 		return nil, err

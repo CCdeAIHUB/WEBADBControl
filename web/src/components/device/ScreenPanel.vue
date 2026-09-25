@@ -6,6 +6,7 @@ import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
+import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 
 const props = defineProps<{ deviceId: string; active: boolean }>()
 const ui = useUiStore()
@@ -20,6 +21,9 @@ const requestedFPS = ref('30')
 const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
 const isFullscreen = ref(false)
+const companionPrompt = ref(false)
+const companionInstalling = ref(false)
+const pendingCompanionAction = ref<Record<string, unknown> | null>(null)
 const activePointers = new Set<number>()
 const lastTouchMoveAt = new Map<number, number>()
 let socket: WebSocket | undefined
@@ -168,9 +172,34 @@ async function sendAction(payload: Record<string, unknown>) {
   try {
     await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify(payload) })
   } catch (error) {
-    ui.failure(toAppError(error))
+    const appError = toAppError(error)
+    if (['COMPANION_INSTALL_REQUIRED', 'COMPANION_UPGRADE_REQUIRED'].includes(appError.errorCode)) {
+      pendingCompanionAction.value = payload
+      companionPrompt.value = true
+    } else {
+      ui.failure(appError)
+    }
   } finally {
     actionInFlight = false
+  }
+}
+
+async function installCompanionAndRetry() {
+  if (companionInstalling.value) return
+  companionInstalling.value = true
+  try {
+    const result = await api<{ installedVersionName?: string; installedVersionCode: number }>(`/devices/${encodeURIComponent(props.deviceId)}/companion/install`, { method: 'POST', body: '{}' })
+    companionPrompt.value = false
+    ui.notify('伴侣应用已安装', `设备版本：${result.installedVersionName || result.installedVersionCode}；正在重试控制操作。`, 'success')
+    const pending = pendingCompanionAction.value
+    pendingCompanionAction.value = null
+    actionInFlight = false
+    lastActionAt = 0
+    if (pending) await sendAction(pending)
+  } catch (error) {
+    ui.failure(toAppError(error))
+  } finally {
+    companionInstalling.value = false
   }
 }
 
@@ -317,4 +346,12 @@ onBeforeUnmount(() => {
       <button class="icon-button !border-white/8 !text-slate-400 hover:!bg-white/8 hover:!text-white" title="电源键" @click="sendAction({ type: 'key', key: 'POWER' })"><Power :size="17" /></button>
     </div>
   </div>
+  <ConfirmDialog
+    :open="companionPrompt"
+    title="该控制操作需要伴侣能力支持"
+    description="设备系统拒绝了直接 ADB 控制，需要 ADBControl Companion 的无障碍能力继续操作。是否安装或覆盖安装服务端内置的伴侣 App？签名不一致时 Android 会拒绝覆盖，不会自动卸载现有应用。"
+    :confirm-text="companionInstalling ? '正在安装…' : '安装 / 覆盖安装'"
+    @cancel="companionPrompt = false; pendingCompanionAction = null"
+    @confirm="installCompanionAndRetry"
+  />
 </template>

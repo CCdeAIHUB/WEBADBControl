@@ -10,7 +10,7 @@
 | 应用列表、启动、停止、清除、卸载、安装 | 应用管理 | `/packages/*` |
 | 文件浏览、上传、下载 | 文件管理 | `/files/*` |
 | ADB 终端 | 安全终端 | `args: string[]`，不经过主机 Shell |
-| Companion 安装、版本能力检测与权限 | 伴侣能力；投屏和能力调用前自动检查，低版本使用 `adb install -r` 安全覆盖升级并复检 | Core `device.*` IPC + `adb.exec` 参数数组 |
+| Companion 安装、版本能力检测与权限 | 需要伴侣的能力调用前检查；缺失或低版本时使用内建对话框征得确认，再以 `adb install -r` 安装并复检 | Core `device.*` IPC + `adb.exec` 参数数组 |
 | 相机、录音、剪贴板、短信、电话、传感器、音量、悬浮窗等 | 通用能力调用器 | Core `device.invoke` → QUIC commandRequest |
 | 自动化任务 DSL、任务 CRUD | 自动化任务 | SQLite + `/automation/tasks` |
 | 手动运行、暂停、继续、停止、运行记录 | 自动化任务 | 显式状态机 + `/automation/runs` |

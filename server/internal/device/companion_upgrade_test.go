@@ -14,6 +14,7 @@ import (
 
 type companionUpgradeCaller struct {
 	installed           bool
+	retainedRecord      bool
 	versionCode         int64
 	versionName         string
 	installCalls        int
@@ -29,8 +30,12 @@ func (c *companionUpgradeCaller) Call(_ context.Context, method string, params a
 	output := CommandOutput{}
 	joined := strings.Join(args, " ")
 	switch {
-	case strings.Contains(joined, "shell dumpsys package "+companionPackageName):
+	case strings.Contains(joined, "shell pm list packages "+companionPackageName):
 		if c.installed {
+			output.Stdout = "package:" + companionPackageName + "\n"
+		}
+	case strings.Contains(joined, "shell dumpsys package "+companionPackageName):
+		if c.installed || c.retainedRecord {
 			output.Stdout = "Packages:\n  Package [" + companionPackageName + "]:\n    versionCode=" + formatVersionCode(c.versionCode) + " minSdk=29 targetSdk=36\n    versionName=" + c.versionName + "\n"
 		} else {
 			output.Stdout = "Unable to find package: " + companionPackageName + "\n"
@@ -64,10 +69,10 @@ func testCompanionRequirement(t *testing.T) CompanionRequirement {
 }
 
 func TestEnsureCompanionUpgradesOutdatedPackageAndVerifiesVersion(t *testing.T) {
-	// 场景：设备安装旧版伴侣时，能力入口必须使用 install -r 覆盖升级，并在成功后重新读取版本。
+	// 场景：用户确认覆盖安装后，旧版伴侣使用 install -r 升级并重新读取版本。
 	caller := &companionUpgradeCaller{installed: true, versionCode: 11, versionName: "0.11.0"}
 	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
-	result, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "capabilities")
+	result, err := service.ForceInstallConfiguredCompanion(context.Background(), "phone", "manual-confirmed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +82,7 @@ func TestEnsureCompanionUpgradesOutdatedPackageAndVerifiesVersion(t *testing.T) 
 }
 
 func TestEnsureCompanionSkipsCurrentPackage(t *testing.T) {
-	// 场景：设备版本已经满足最低能力版本时，任何入口都不能重复覆盖安装。
+	// 场景：设备版本满足能力基线时，能力入口不执行安装。
 	caller := &companionUpgradeCaller{installed: true, versionCode: 13, versionName: "0.13.0"}
 	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
 	result, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "screen")
@@ -90,10 +95,10 @@ func TestEnsureCompanionSkipsCurrentPackage(t *testing.T) {
 }
 
 func TestEnsureCompanionInstallsMissingPackage(t *testing.T) {
-	// 场景：伴侣缺失时允许直接安装服务端内置 APK，且安装后必须达到要求版本。
+	// 场景：用户确认安装后，缺失的伴侣使用服务端内置 APK 安装并复检。
 	caller := &companionUpgradeCaller{}
 	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
-	result, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "screen")
+	result, err := service.ForceInstallConfiguredCompanion(context.Background(), "phone", "manual-confirmed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +114,7 @@ func TestEnsureCompanionNeverUninstallsOnSignatureMismatch(t *testing.T) {
 		installOutput: CommandOutput{ExitCode: 1, Stderr: "INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match"},
 	}
 	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
-	_, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "screen")
+	_, err := service.ForceInstallConfiguredCompanion(context.Background(), "phone", "manual-confirmed")
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.ErrorCode != "COMPANION_SIGNATURE_MISMATCH" {
 		t.Fatalf("error=%v, want COMPANION_SIGNATURE_MISMATCH", err)
@@ -123,8 +128,35 @@ func TestEnsureCompanionRejectsUnverifiedUpgrade(t *testing.T) {
 	// 场景：ADB 报告安装成功但设备版本仍未更新时，流程必须失败，不能把旧伴侣标记为可用。
 	caller := &companionUpgradeCaller{installed: true, versionCode: 11, versionName: "0.11.0", keepOldAfterInstall: true}
 	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
-	_, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "screen")
+	_, err := service.ForceInstallConfiguredCompanion(context.Background(), "phone", "manual-confirmed")
 	if err == nil || !strings.Contains(err.Error(), "COMPANION_UPGRADE_VERIFY_FAILED") {
 		t.Fatalf("error=%v, want COMPANION_UPGRADE_VERIFY_FAILED", err)
+	}
+}
+
+func TestEnsureCompanionRequiresConfirmationWithoutInstalling(t *testing.T) {
+	// 场景：功能发现伴侣过旧时只返回可识别的确认错误，不得擅自覆盖安装。
+	caller := &companionUpgradeCaller{installed: true, versionCode: 11, versionName: "0.11.0"}
+	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
+	_, err := service.EnsureConfiguredCompanion(context.Background(), "phone", "capabilities")
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.ErrorCode != "COMPANION_UPGRADE_REQUIRED" {
+		t.Fatalf("error=%v, want COMPANION_UPGRADE_REQUIRED", err)
+	}
+	if caller.installCalls != 0 {
+		t.Fatalf("installCalls=%d, want 0 before user confirmation", caller.installCalls)
+	}
+}
+
+func TestProbeCompanionTreatsRetainedUninstalledRecordAsMissing(t *testing.T) {
+	// 场景：用户卸载后 dumpsys 仍保留旧签名包记录，正常安装列表为空时必须判定为未安装。
+	caller := &companionUpgradeCaller{retainedRecord: true, versionCode: 11, versionName: "0.11.0"}
+	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
+	result, err := service.CheckConfiguredCompanion(context.Background(), "phone", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompanionUpgradeMissing || result.InstalledVersionCode != 0 {
+		t.Fatalf("unexpected result=%#v", result)
 	}
 }

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { CheckCircle2, Download, KeyRound, Play, RefreshCw, ShieldAlert, Smartphone, Wifi } from 'lucide-vue-next'
 import UiSelect from '@/components/common/UiSelect.vue'
+import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
 import type { CompanionStatus, CompanionUpgradeResult } from '@/types/api'
@@ -17,6 +18,9 @@ const selected = ref<Record<string, any> | null>(null)
 const operation = ref('')
 const argumentsJson = ref('{}')
 const companionError = ref('')
+const installPrompt = ref(false)
+const installing = ref(false)
+const retryAfterInstall = ref<null | (() => Promise<void>)>(null)
 
 const quicConnected = computed(() => permissions.value.length > 0)
 const adbCompatibilityMode = computed(() => status.value?.adbResponsive && capabilities.value.length > 0 && !quicConnected.value)
@@ -39,39 +43,29 @@ const statusMessage = computed(() => {
   if (quicConnected.value) return '已通过原 Core/QUIC 同步能力目录，可以使用完整伴侣能力。'
   if (adbCompatibilityMode.value) return 'QUIC 会话尚未建立；能力目录来自 Rust Core，操作将通过与 Windows 客户端一致的 ADB broadcast 通道执行并逐项校验权限。'
   if (status.value?.adbResponsive) return 'App 已安装且 broadcast 探测正常；如果能力目录为空，请在手机端确认 Companion 服务与权限。'
-  if (status.value?.installed === false) return status.value.message || '设备在线后，服务端将自动安装内置 Companion APK。'
-  if (status.value?.updateRequired) return `设备版本 ${status.value.installedVersionName || status.value.installedVersionCode || '未知'}，服务端要求 ${status.value.requiredVersionName || status.value.requiredVersionCode}；在线后将自动安全覆盖升级。`
+  if (status.value?.installed === false) return status.value.message || '使用伴侣能力前需要确认安装服务端内置 APK。'
+  if (status.value?.updateRequired) return `设备版本 ${status.value.installedVersionName || status.value.installedVersionCode || '未知'}，服务端要求 ${status.value.requiredVersionName || status.value.requiredVersionCode}；需要确认后才能覆盖安装。`
   return status.value?.message || '请按流程安装、打开并授权 Companion。'
 })
+const installPromptDescription = computed(() => status.value?.installed === false
+  ? '当前功能需要 ADBControl Companion 支持，但设备尚未安装。是否安装服务端内置的 Companion APK？'
+  : `当前 Companion 版本 ${status.value?.installedVersionName || status.value?.installedVersionCode || '未知'} 不支持所需能力，要求版本为 ${status.value?.requiredVersionName || status.value?.requiredVersionCode || '当前服务版本'}。是否使用 install -r 覆盖安装？应用数据会保留，但签名不一致时 Android 将拒绝安装。`)
 
 async function load() {
   loading.value = true
   companionError.value = ''
-  let ensured = true
   try {
-    const upgrade = await api<CompanionUpgradeResult>(`/devices/${encodeURIComponent(props.deviceId)}/companion/ensure`, { method: 'POST', body: '{}' })
-    if (upgrade.updated) {
-      ui.notify('伴侣已自动升级', `${upgrade.previousVersionName || '未安装'} → ${upgrade.installedVersionName}`, 'success')
-    }
-  } catch (error) {
-    ensured = false
-    const appError = toAppError(error)
-    companionError.value = `伴侣检查失败：${appError.message}（${appError.errorCode}）`
-  }
-  try {
-    if (!ensured) {
+    status.value = await api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`)
+    if (status.value.updateRequired) {
       capabilities.value = []
       permissions.value = []
-      status.value = await api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`)
+      installPrompt.value = true
       return
     }
-    const [statusResult, capabilitiesResult, permissionsResult] = await Promise.allSettled([
-      api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`),
+    const [capabilitiesResult, permissionsResult] = await Promise.allSettled([
       api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/capabilities`),
       api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/permissions`),
     ])
-    if (statusResult.status === 'fulfilled') status.value = statusResult.value
-    else companionError.value = companionError.value || `${toAppError(statusResult.reason).message}（${toAppError(statusResult.reason).errorCode}）`
     capabilities.value = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : []
     permissions.value = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
     const syncError = capabilitiesResult.status === 'rejected' ? capabilitiesResult.reason : permissionsResult.status === 'rejected' ? permissionsResult.reason : null
@@ -95,12 +89,27 @@ function permissionLabel(id: string) {
 }
 
 async function install() {
+  if (installing.value) return
+  installing.value = true
   try {
     const result = await api<CompanionUpgradeResult>(`/devices/${encodeURIComponent(props.deviceId)}/companion/install`, { method: 'POST', body: '{}' })
-    ui.notify('伴侣应用已覆盖安装', `设备版本：${result.installedVersionName || result.installedVersionCode}`, 'success')
+    installPrompt.value = false
+    ui.notify(result.state === 'installed' ? '伴侣应用已安装' : '伴侣应用已覆盖安装', `设备版本：${result.installedVersionName || result.installedVersionCode}`, 'success')
     await load()
+    const retry = retryAfterInstall.value
+    retryAfterInstall.value = null
+    if (retry) await retry()
   }
   catch (error) { ui.failure(toAppError(error)) }
+  finally { installing.value = false }
+}
+
+function requestInstall(error: unknown, retry?: () => Promise<void>) {
+  const appError = toAppError(error)
+  if (!['COMPANION_INSTALL_REQUIRED', 'COMPANION_UPGRADE_REQUIRED'].includes(appError.errorCode)) return false
+  retryAfterInstall.value = retry ?? null
+  installPrompt.value = true
+  return true
 }
 
 async function openCompanion() {
@@ -109,7 +118,9 @@ async function openCompanion() {
   try {
     await api(`/devices/${encodeURIComponent(props.deviceId)}/terminal`, { method: 'POST', body: JSON.stringify({ args: ['shell', 'monkey', '-p', 'com.adbcontrol.companion', '1'] }) })
     ui.notify('已尝试打开伴侣应用', '如设备未响应，请在手机上手动打开 ADBControl Companion。', 'success')
-  } catch (error) { ui.failure(toAppError(error)) }
+  } catch (error) {
+    if (!requestInstall(error, openCompanion)) ui.failure(toAppError(error))
+  }
   finally { opening.value = false }
 }
 
@@ -119,7 +130,9 @@ async function invoke() {
     const args = JSON.parse(argumentsJson.value) as Record<string, unknown>
     await api(`/devices/${encodeURIComponent(props.deviceId)}/capabilities/invoke`, { method: 'POST', body: JSON.stringify({ capabilityId: selected.value.id, operation: operation.value, args }) })
     ui.notify('能力请求已发送', `${selected.value.id} · ${operation.value}`, 'success')
-  } catch (error) { ui.failure(toAppError(error)) }
+  } catch (error) {
+    if (!requestInstall(error, invoke)) ui.failure(toAppError(error))
+  }
 }
 
 function choose(capability: Record<string, any>) {
@@ -162,4 +175,12 @@ onMounted(load)
       <section class="card p-5"><div class="flex items-center gap-2"><KeyRound :size="17" class="text-brand-600" /><h3 class="section-title m-0">能力调用</h3></div><template v-if="selected"><div class="mt-5 rounded-lg bg-slate-50 p-3 dark:bg-white/5"><div class="text-xs font-semibold">{{ selected.displayName || selected.id }}</div><div class="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-300">{{ selected.id }}</div></div><label class="mt-4 block text-xs font-medium text-slate-700 dark:text-slate-200">操作</label><UiSelect v-model="operation" class="mt-2" aria-label="能力操作"><option v-for="item in selected.operations" :key="item" :value="item">{{ item }}</option></UiSelect><label class="mt-4 block text-xs font-medium text-slate-700 dark:text-slate-200">参数 JSON</label><textarea v-model="argumentsJson" class="field mt-2 !h-36 py-3 font-mono text-xs" spellcheck="false" /><button class="btn-primary mt-4 w-full" @click="invoke"><Play :size="15" />发送请求</button></template><div v-else class="grid min-h-56 place-items-center text-center"><div><KeyRound :size="25" class="mx-auto mb-3 text-slate-400 dark:text-slate-500" /><p class="m-0 text-xs text-slate-500 dark:text-slate-300">从能力列表选择一项</p></div></div></section>
     </section>
   </div>
+  <ConfirmDialog
+    :open="installPrompt"
+    title="该功能需要伴侣能力支持"
+    :description="installPromptDescription"
+    :confirm-text="installing ? '正在安装…' : status?.installed === false ? '安装伴侣 App' : '覆盖安装伴侣 App'"
+    @cancel="installPrompt = false; retryAfterInstall = null"
+    @confirm="install"
+  />
 </template>
