@@ -187,7 +187,17 @@ func (s *Server) static(writer http.ResponseWriter, request *http.Request) {
 		if contentType := mime.TypeByExtension(filepath.Ext(path)); contentType != "" {
 			writer.Header().Set("Content-Type", contentType)
 		}
+		if strings.HasPrefix(request.URL.Path, "/assets/") {
+			writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			writer.Header().Set("Cache-Control", "no-store")
+		}
 		http.ServeFile(writer, request, path)
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/assets/") {
+		writer.Header().Set("Cache-Control", "no-store")
+		http.NotFound(writer, request)
 		return
 	}
 	index := filepath.Join(s.config.WebDir, "index.html")
@@ -198,6 +208,7 @@ func (s *Server) static(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer file.Close()
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
 	if _, err := io.Copy(writer, file); err != nil {
 		s.logger.Warn("static_response_copy_failed", "traceId", writer.Header().Get("X-Request-ID"), "path", request.URL.Path, "error", err)
 	}

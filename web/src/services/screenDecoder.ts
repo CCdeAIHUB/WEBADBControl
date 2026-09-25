@@ -1,4 +1,5 @@
 import JMuxer from 'jmuxer'
+import { TinyH264Decoder } from '@yume-chan/scrcpy-decoder-tinyh264'
 
 export type ScreenDecoderMode = 'webcodecs' | 'mse' | 'software'
 
@@ -214,7 +215,7 @@ class SoftwareScreenDecoder implements ScreenDecoder {
   private animationFrame?: number
 
   private constructor(
-    private readonly decoder: import('@yume-chan/scrcpy-decoder-tinyh264').TinyH264Decoder,
+    private readonly decoder: TinyH264Decoder,
     private readonly writer: SoftwarePacketWriter,
     private readonly callbacks: ScreenDecoderCallbacks,
   ) {
@@ -222,7 +223,6 @@ class SoftwareScreenDecoder implements ScreenDecoder {
   }
 
   static async create(canvas: HTMLCanvasElement, callbacks: ScreenDecoderCallbacks): Promise<SoftwareScreenDecoder> {
-    const { TinyH264Decoder } = await import('@yume-chan/scrcpy-decoder-tinyh264')
     const decoder = new TinyH264Decoder({ canvas })
     return new SoftwareScreenDecoder(decoder, decoder.writable.getWriter(), callbacks)
   }
