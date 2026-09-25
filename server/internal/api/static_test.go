@@ -48,3 +48,20 @@ func TestStaticMissingAssetReturns404InsteadOfSPAHTML(t *testing.T) {
 		t.Fatal("missing asset must not fall back to SPA HTML")
 	}
 }
+
+func TestSecurityHeadersAllowMSEBlobMediaWithoutAllowingBlobScripts(t *testing.T) {
+	// 场景：局域网 HTTP 投屏使用 MSE 的 blob: 媒体地址，但脚本仍只能来自同源。
+	server := &Server{}
+	response := httptest.NewRecorder()
+	server.securityHeaders(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	policy := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, "media-src 'self' blob:") {
+		t.Fatalf("Content-Security-Policy=%q, want MSE blob media allowance", policy)
+	}
+	if strings.Contains(policy, "script-src 'self' blob:") {
+		t.Fatalf("Content-Security-Policy=%q must not allow blob scripts", policy)
+	}
+}

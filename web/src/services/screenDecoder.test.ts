@@ -6,9 +6,10 @@ describe('screen decoder selection', () => {
     expect(screenDecoderPreference({ hasWebCodecs: true, hasMediaSource: true, isSecureContext: true })).toBe('webcodecs')
   })
 
-  it('uses software video decoding immediately for an ordinary LAN HTTP page', () => {
-    expect(screenDecoderPreference({ hasWebCodecs: false, hasMediaSource: true, isSecureContext: false })).toBe('software')
-    expect(screenDecoderStatusText('software')).toContain('HTTP')
+  it('uses MSE hardware playback for an ordinary LAN HTTP page', () => {
+    // 场景：MSE 不要求安全上下文，局域网 HTTP 应优先使用浏览器硬件播放而不是受 Profile 限制的软件解码。
+    expect(screenDecoderPreference({ hasWebCodecs: false, hasMediaSource: true, isSecureContext: false })).toBe('mse')
+    expect(screenDecoderStatusText('mse')).toContain('HTTP')
   })
 
   it('keeps the software decoder as the final compatibility fallback', () => {

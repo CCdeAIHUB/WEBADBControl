@@ -23,7 +23,8 @@ export interface ScreenDecoderCallbacks {
 
 export function screenDecoderPreference(environment: ScreenDecoderEnvironment): ScreenDecoderMode {
   if (environment.hasWebCodecs) return 'webcodecs'
-  if (!environment.isSecureContext) return 'software'
+  // Media Source Extensions work on ordinary LAN HTTP pages and let the
+  // browser decode vendor AVC profiles that TinyH264 (Baseline-only) rejects.
   return environment.hasMediaSource ? 'mse' : 'software'
 }
 
