@@ -97,3 +97,25 @@ func TestActionDoesNotFallbackForUnrelatedADBFailure(t *testing.T) {
 		t.Fatal("unrelated ADB failure must not be treated as input permission denial")
 	}
 }
+
+func TestScreenControlTransportSelectsAndCachesCompanionWhenShellInjectionIsDenied(t *testing.T) {
+	// 场景：投屏启动前的无副作用探测被 OEM 拒绝，画面手势应改走伴侣，后续动作不得重复尝试已知失败的 shell input。
+	caller := &actionFallbackCaller{accessibilityEnabled: true}
+	service := NewService(caller)
+	transport, err := service.ScreenControlTransport(context.Background(), "serial-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport != ScreenControlCompanion {
+		t.Fatalf("transport = %q, want %q", transport, ScreenControlCompanion)
+	}
+	probeCalls := len(caller.calls)
+	if err := service.Action(context.Background(), "serial-1", ActionRequest{Type: "swipe", X: 10, Y: 20, EndX: 100, EndY: 200, DurationMS: 250}); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range caller.calls[probeCalls:] {
+		if strings.Contains(strings.Join(call, " "), "shell input swipe") {
+			t.Fatalf("cached companion transport must skip denied shell input: %#v", caller.calls)
+		}
+	}
+}

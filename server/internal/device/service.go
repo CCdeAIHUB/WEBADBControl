@@ -35,6 +35,7 @@ type Service struct {
 	core                  coreipc.Caller
 	companionRequirement  CompanionRequirement
 	companionUpgradeLocks sync.Map
+	inputTransports       sync.Map
 	logger                *slog.Logger
 }
 
@@ -348,10 +349,19 @@ func (s *Service) ActionWithOutcome(ctx context.Context, deviceID string, reques
 	if err != nil {
 		return ActionOutcome{}, apperror.Wrap("DEVICE_ACTION_INVALID", "设备操作参数无效", "device.control", false, err)
 	}
+	if transport, ok := s.inputTransports.Load(deviceID); ok && transport == ScreenControlCompanion {
+		fallbackTransport, fallbackErr := s.fallbackDeniedInput(ctx, deviceID, request)
+		return ActionOutcome{Transport: fallbackTransport}, fallbackErr
+	}
 	_, err = s.Exec(ctx, args)
-	if err == nil || !isInputInjectionDenied(err) {
+	if err == nil {
+		s.inputTransports.Store(deviceID, ScreenControlScrcpy)
+		return ActionOutcome{Transport: "adb-input"}, nil
+	}
+	if !isInputInjectionDenied(err) {
 		return ActionOutcome{Transport: "adb-input"}, err
 	}
+	s.inputTransports.Store(deviceID, ScreenControlCompanion)
 	transport, fallbackErr := s.fallbackDeniedInput(ctx, deviceID, request)
 	return ActionOutcome{Transport: transport}, fallbackErr
 }

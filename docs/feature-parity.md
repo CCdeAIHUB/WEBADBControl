@@ -4,7 +4,7 @@
 |---|---|---|
 | 设备发现、USB/无线连接 | 工作台、设备中心 | `GET /devices`、`POST /devices/connect` |
 | 设备详情与状态 | 设备详情 / 概览 | `GET /devices/{id}/overview` |
-| 实时画面与触控 | scrcpy H.264 视频流（可显式启停、选择 15/30/60 FPS、连续触控） | WebSocket `/screen?fps=`、scrcpy 控制通道、`POST /actions` |
+| 实时画面与触控 | scrcpy H.264 视频流（可显式启停、选择 15/30/60 FPS、连续触控；受限 OEM 自动使用伴侣手势） | WebSocket `/screen?fps=`、scrcpy 控制通道、`POST /actions` |
 | 返回、主页、多任务、电源、音量 | 屏幕控制栏 | 固定 ADB 参数白名单；OEM 拒绝 `INJECT_EVENTS` 时主页走 HOME Intent，返回/多任务/触摸走伴侣无障碍 |
 | 硬件与电池信息 | 硬件信息 | `getprop`、`dumpsys battery` |
 | 应用列表、启动、停止、清除、卸载、安装 | 应用管理 | `/packages/*` |
@@ -26,6 +26,6 @@
 
 ## 投屏链路差异（2026-09 更新）
 
-Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。
+Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。投屏握手会用 Android 忽略的 `KEYCODE_UNKNOWN` 探测 shell 输入权限，并在 WebSocket `meta.controlTransport` 中返回 `scrcpy-control` 或 `companion-accessibility`；后者会把浏览器的一次指针操作聚合为点击或滑动，经现有伴侣版本、安装和无障碍检查后执行。
 
 浏览器在可用时优先使用 WebCodecs；普通局域网 HTTP 优先使用不要求安全上下文的 Media Source Extensions（MSE）硬件播放，并通过仅限 `media-src` 的 CSP `blob:` 授权承载生成的 MP4 媒体流。浏览器不支持 MSE 或 MSE 初始化失败时才回退到随页面静态打包的 TinyH264 软件解码，避免把厂商编码器输出的 Main/High Profile 误交给只支持 Baseline 的软件解码器。入口 HTML 禁止缓存，带哈希资源使用不可变缓存。Web scrcpy 会话仍请求 AVC Baseline Level 4 以提高各路径兼容性。服务端日志记录会话尺寸、首个配置包、首个关键帧和结束时的包计数；浏览器解码异常及 8 秒首帧超时进入系统日志。当前 Web 暂未开放 Windows 客户端的码率、分辨率和 Companion QUIC 视频源选择。

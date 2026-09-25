@@ -4,6 +4,7 @@ import { Expand, Home, LoaderCircle, Minimize2, MousePointer2, Play, Power, Rota
 import { api, toAppError } from '@/services/api'
 import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
+import { screenGestureAction, type ScreenGestureStart, type ScreenPoint } from '@/services/screenControl'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
@@ -20,12 +21,14 @@ const container = ref<HTMLElement>()
 const requestedFPS = ref('30')
 const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
+const controlTransport = ref<'scrcpy-control' | 'companion-accessibility'>('scrcpy-control')
 const isFullscreen = ref(false)
 const companionPrompt = ref(false)
 const companionInstalling = ref(false)
 const pendingCompanionAction = ref<Record<string, unknown> | null>(null)
 const activePointers = new Set<number>()
 const lastTouchMoveAt = new Map<number, number>()
+const gestureStarts = new Map<number, ScreenGestureStart>()
 let socket: WebSocket | undefined
 let decoder: ScreenDecoder | undefined
 let decoderPacketQueue = Promise.resolve()
@@ -35,6 +38,7 @@ let connectionSeq = 0
 let actionInFlight = false
 let lastActionAt = 0
 let firstFrameTimer: number | undefined
+let gestureActionQueue = Promise.resolve()
 
 const statusText = computed(() => streamError.value || ({ idle: '投屏未开启', connecting: '正在启动实时投屏', live: '实时投屏运行中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
@@ -82,7 +86,7 @@ function start() {
 async function handleStreamMessage(event: MessageEvent, seq: number) {
     if (seq !== connectionSeq) return
     if (typeof event.data === 'string') {
-      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string }
+      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string; controlTransport?: string }
       if (meta.type === 'error') {
         streamError.value = meta.message || '实时投屏启动失败'
         status.value = 'error'
@@ -91,6 +95,7 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       }
       if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
       streamSize.value = { width: meta.width, height: meta.height }
+      controlTransport.value = meta.controlTransport === 'companion-accessibility' ? 'companion-accessibility' : 'scrcpy-control'
       decoder?.dispose()
       decoder = undefined
       await nextTick()
@@ -156,7 +161,7 @@ function stop() {
   decoder?.dispose(); decoder = undefined
   clearFirstFrameTimer()
   decoderPacketQueue = Promise.resolve()
-  activePointers.clear(); lastTouchMoveAt.clear()
+  activePointers.clear(); lastTouchMoveAt.clear(); gestureStarts.clear()
   socket = undefined
   connected.value = false
   status.value = 'idle'
@@ -217,15 +222,22 @@ function imagePoint(event: PointerEvent) {
 function beginPointer(event: PointerEvent) {
   const point = imagePoint(event)
   activePointers.add(event.pointerId)
+  gestureStarts.set(event.pointerId, { point, startedAt: Date.now() })
   ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-  sendTouch(event.pointerId, 0, point)
+  if (controlTransport.value === 'scrcpy-control') sendTouch(event.pointerId, 0, point)
 }
 
 function finishPointer(event: PointerEvent) {
   if (!activePointers.delete(event.pointerId)) return
   lastTouchMoveAt.delete(event.pointerId)
   const end = imagePoint(event)
-  sendTouch(event.pointerId, 1, end)
+  const start = gestureStarts.get(event.pointerId)
+  gestureStarts.delete(event.pointerId)
+  if (controlTransport.value === 'scrcpy-control') {
+    sendTouch(event.pointerId, 1, end)
+  } else if (start) {
+    queueGestureAction(screenGestureAction(start, end, Date.now()))
+  }
 }
 
 function movePointer(event: PointerEvent) {
@@ -233,19 +245,37 @@ function movePointer(event: PointerEvent) {
   if (!activePointers.has(event.pointerId) || now - (lastTouchMoveAt.get(event.pointerId) ?? 0) < 16) return
   lastTouchMoveAt.set(event.pointerId, now)
   const point = imagePoint(event)
-  sendTouch(event.pointerId, 2, point)
+  if (controlTransport.value === 'scrcpy-control') sendTouch(event.pointerId, 2, point)
 }
 
 function cancelPointer(event: PointerEvent) {
   if (!activePointers.delete(event.pointerId)) return
   const point = imagePoint(event)
   lastTouchMoveAt.delete(event.pointerId)
-  sendTouch(event.pointerId, 1, point)
+  gestureStarts.delete(event.pointerId)
+  if (controlTransport.value === 'scrcpy-control') sendTouch(event.pointerId, 1, point)
 }
 
-function sendTouch(pointerId: number, action: number, point: { x: number; y: number; width: number; height: number }) {
+function sendTouch(pointerId: number, action: number, point: ScreenPoint) {
   if (socket?.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({ type: 'touch', action, pointerId: pointerId >>> 0, ...point }))
+}
+
+function queueGestureAction(payload: Record<string, unknown>) {
+  gestureActionQueue = gestureActionQueue.then(async () => {
+    if (companionPrompt.value) return
+    try {
+      await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify(payload) })
+    } catch (error) {
+      const appError = toAppError(error)
+      if (['COMPANION_INSTALL_REQUIRED', 'COMPANION_UPGRADE_REQUIRED'].includes(appError.errorCode)) {
+        pendingCompanionAction.value = payload
+        companionPrompt.value = true
+      } else {
+        ui.failure(appError)
+      }
+    }
+  })
 }
 
 function reserveActionSlot() {
@@ -329,7 +359,7 @@ onBeforeUnmount(() => {
       </label>
       <span class="rounded-md border border-brand-400/20 bg-brand-400/10 px-2 py-1 text-brand-200">后端：scrcpy H.264 视频流</span>
       <span class="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-1 text-sky-200">解码：{{ screenDecoderStatusText(decoderMode) }}</span>
-      <span class="text-slate-400">移动端支持单指、多指触摸与拖动控制</span>
+      <span class="text-slate-400">{{ controlTransport === 'companion-accessibility' ? '控制：伴侣无障碍点击与滑动' : '移动端支持单指、多指触摸与拖动控制' }}</span>
     </div>
     <div class="relative grid place-items-center" :class="isFullscreen ? 'min-h-0 flex-1 p-2 sm:p-4' : 'min-h-[460px] p-5'">
       <video v-if="streamSize.width && decoderMode === 'mse'" ref="video" aria-label="设备实时屏幕" autoplay muted playsinline disablepictureinpicture class="max-w-full touch-none cursor-crosshair select-none rounded-md bg-black object-contain shadow-2xl" :class="isFullscreen ? 'h-full max-h-full w-full' : 'max-h-[680px]'" @pointerdown.prevent="beginPointer" @pointermove.prevent="movePointer" @pointerup.prevent="finishPointer" @pointercancel.prevent="cancelPointer" />

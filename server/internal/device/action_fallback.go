@@ -16,6 +16,28 @@ type companionAccessibilityStatus struct {
 	} `json:"result"`
 }
 
+const (
+	ScreenControlScrcpy    = "scrcpy-control"
+	ScreenControlCompanion = "companion-accessibility"
+)
+
+// ScreenControlTransport probes Android's shell input permission with
+// KEYCODE_UNKNOWN, which Android applications ignore. This keeps scrcpy's
+// low-latency pointer stream where it is supported and selects the Companion
+// gesture path on OEM builds that deny INJECT_EVENTS to the shell user.
+func (s *Service) ScreenControlTransport(ctx context.Context, deviceID string) (string, error) {
+	_, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "input", "keyevent", "KEYCODE_UNKNOWN"))
+	if err == nil {
+		s.inputTransports.Store(deviceID, ScreenControlScrcpy)
+		return ScreenControlScrcpy, nil
+	}
+	if !isInputInjectionDenied(err) {
+		return ScreenControlScrcpy, err
+	}
+	s.inputTransports.Store(deviceID, ScreenControlCompanion)
+	return ScreenControlCompanion, nil
+}
+
 func isInputInjectionDenied(err error) bool {
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.ErrorCode != "ADB_COMMAND_FAILED" {

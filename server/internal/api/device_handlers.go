@@ -119,6 +119,13 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	}
 	defer connection.Close()
 	frameRate := screenFrameRate(request.URL.Query().Get("fps"), 30)
+	controlContext, cancelControlProbe := context.WithTimeout(request.Context(), 3*time.Second)
+	controlTransport, controlErr := s.devices.ScreenControlTransport(controlContext, request.PathValue("id"))
+	cancelControlProbe()
+	if controlErr != nil {
+		s.logger.Warn("screen_control_probe_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", controlErr)
+		controlTransport = device.ScreenControlScrcpy
+	}
 	session, err := s.devices.StartScrcpy(request.Context(), request.PathValue("id"), device.ScrcpyOptions{FrameRate: frameRate})
 	if err != nil {
 		s.logger.Error("screen_start_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "fps", frameRate, "error", err)
@@ -127,8 +134,8 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	}
 	defer session.Close()
 	width, height := session.Size()
-	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "width", width, "height", height, "fps", frameRate)
-	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height}); err != nil {
+	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "controlTransport", controlTransport, "width", width, "height", height, "fps", frameRate)
+	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height, "controlTransport": controlTransport}); err != nil {
 		return
 	}
 	go func() {
