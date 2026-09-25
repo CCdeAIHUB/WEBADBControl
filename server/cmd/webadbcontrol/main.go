@@ -46,7 +46,12 @@ func main() {
 	}
 	defer transport.Close()
 	core := coreipc.NewClient(transport)
-	devices := device.NewService(core)
+	devices := device.NewService(core, device.WithCompanionRequirement(device.CompanionRequirement{
+		APKPath:     applicationConfig.CompanionAPK,
+		VersionCode: applicationConfig.CompanionVersionCode,
+		VersionName: applicationConfig.CompanionVersionName,
+	}))
+	devices.SetLogger(logger)
 	repository, err := automation.OpenRepository(filepath.Join(applicationConfig.DataDir, "automation.sqlite"))
 	if err != nil {
 		logger.Error("automation_repository_failed", "error", err)

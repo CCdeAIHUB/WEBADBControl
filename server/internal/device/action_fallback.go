@@ -68,7 +68,7 @@ func accessibilityFallback(request ActionRequest) (string, map[string]any, bool)
 	case "swipe":
 		return "accessibility.touch.swipe", map[string]any{
 			"startX": request.X, "startY": request.Y, "endX": request.EndX, "endY": request.EndY,
-			"durationMs": request.DurationMS,
+			"durationMs":      request.DurationMS,
 			"coordinateWidth": request.CoordinateWidth, "coordinateHeight": request.CoordinateHeight,
 		}, true
 	default:

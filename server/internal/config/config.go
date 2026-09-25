@@ -11,29 +11,33 @@ import (
 )
 
 type Config struct {
-	Address           string
-	CoreBinary        string
-	CoreRemoteDataDir string
-	CoreRemoteListen  string
-	DataDir           string
-	WebDir            string
-	AuthToken         string
-	CompanionAPK      string
-	BehindProxy       bool
+	Address              string
+	CoreBinary           string
+	CoreRemoteDataDir    string
+	CoreRemoteListen     string
+	DataDir              string
+	WebDir               string
+	AuthToken            string
+	CompanionAPK         string
+	CompanionVersionCode int64
+	CompanionVersionName string
+	BehindProxy          bool
 }
 
 func Load() (Config, error) {
 	dataDir := env("WEBADB_DATA_DIR", "./data")
 	config := Config{
-		Address:           env("WEBADB_ADDRESS", "127.0.0.1:8080"),
-		CoreBinary:        env("WEBADB_CORE_BINARY", "./adbcontrol-core"),
-		CoreRemoteDataDir: filepath.Join(dataDir, "remote"),
-		CoreRemoteListen:  persistedRemoteListen(filepath.Join(dataDir, "settings.json")),
-		DataDir:           dataDir,
-		WebDir:            env("WEBADB_WEB_DIR", "./web"),
-		AuthToken:         os.Getenv("WEBADB_AUTH_TOKEN"),
-		CompanionAPK:      env("WEBADB_COMPANION_APK", "./companion.apk"),
-		BehindProxy:       envBool("WEBADB_BEHIND_PROXY", false),
+		Address:              env("WEBADB_ADDRESS", "127.0.0.1:8080"),
+		CoreBinary:           env("WEBADB_CORE_BINARY", "./adbcontrol-core"),
+		CoreRemoteDataDir:    filepath.Join(dataDir, "remote"),
+		CoreRemoteListen:     persistedRemoteListen(filepath.Join(dataDir, "settings.json")),
+		DataDir:              dataDir,
+		WebDir:               env("WEBADB_WEB_DIR", "./web"),
+		AuthToken:            os.Getenv("WEBADB_AUTH_TOKEN"),
+		CompanionAPK:         env("WEBADB_COMPANION_APK", "./companion.apk"),
+		CompanionVersionCode: envInt64("WEBADB_COMPANION_VERSION_CODE", 13),
+		CompanionVersionName: env("WEBADB_COMPANION_VERSION_NAME", "0.13.0"),
+		BehindProxy:          envBool("WEBADB_BEHIND_PROXY", false),
 	}
 	if _, _, err := net.SplitHostPort(config.Address); err != nil {
 		return Config{}, fmt.Errorf("invalid WEBADB_ADDRESS: %w", err)
@@ -82,4 +86,16 @@ func envBool(key string, fallback bool) bool {
 	}
 	parsed, err := strconv.ParseBool(value)
 	return err == nil && parsed
+}
+
+func envInt64(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 1 {
+		return fallback
+	}
+	return parsed
 }

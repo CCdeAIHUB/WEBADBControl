@@ -55,9 +55,25 @@ export interface PackageInfo {
 export interface CompanionStatus {
   installed: boolean
   adbResponsive: boolean
-  state: 'missing' | 'adb-responsive' | 'adb-unreachable' | string
+  state: 'missing' | 'outdated' | 'adb-responsive' | 'adb-unreachable' | string
   message: string
   errorCode?: string
+  installedVersionCode?: number
+  installedVersionName?: string
+  requiredVersionCode?: number
+  requiredVersionName?: string
+  updateRequired: boolean
+}
+
+export interface CompanionUpgradeResult {
+  state: 'ready' | 'installed' | 'updated' | string
+  updated: boolean
+  previousVersionCode?: number
+  previousVersionName?: string
+  installedVersionCode: number
+  installedVersionName: string
+  requiredVersionCode: number
+  requiredVersionName: string
 }
 
 export interface AutomationPermissions {

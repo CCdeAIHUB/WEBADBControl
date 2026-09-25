@@ -475,15 +475,36 @@ func (s *Server) companionStatus(writer http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) installCompanion(writer http.ResponseWriter, request *http.Request) {
-	if _, err := os.Stat(s.config.CompanionAPK); err != nil {
-		writeError(writer, http.StatusServiceUnavailable, apperror.Wrap("COMPANION_APK_MISSING", "服务器未打包 Android 伴侣应用", "companion.install", false, err))
+	result, err := s.devices.ForceInstallConfiguredCompanion(request.Context(), request.PathValue("id"), "manual")
+	if err != nil {
+		writeError(writer, companionUpgradeHTTPStatus(err), err)
 		return
 	}
-	if _, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "install", "-r", s.config.CompanionAPK)); err != nil {
-		writeError(writer, http.StatusBadGateway, err)
+	writeData(writer, http.StatusOK, result)
+}
+
+func (s *Server) ensureCompanion(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.devices.EnsureConfiguredCompanion(request.Context(), request.PathValue("id"), "web-preflight")
+	if err != nil {
+		writeError(writer, companionUpgradeHTTPStatus(err), err)
 		return
 	}
-	writeData(writer, http.StatusOK, map[string]string{"state": "installed"})
+	writeData(writer, http.StatusOK, result)
+}
+
+func companionUpgradeHTTPStatus(err error) int {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		return http.StatusBadGateway
+	}
+	switch appErr.ErrorCode {
+	case "COMPANION_APK_MISSING":
+		return http.StatusServiceUnavailable
+	case "COMPANION_SIGNATURE_MISMATCH":
+		return http.StatusConflict
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 func parseInt(value string, fallback int) int {

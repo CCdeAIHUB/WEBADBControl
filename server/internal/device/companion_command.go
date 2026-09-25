@@ -26,14 +26,26 @@ type CompanionCollectionAccess struct {
 }
 
 type CompanionStatus struct {
-	Installed     bool   `json:"installed"`
-	ADBResponsive bool   `json:"adbResponsive"`
-	State         string `json:"state"`
-	Message       string `json:"message"`
-	ErrorCode     string `json:"errorCode,omitempty"`
+	Installed            bool   `json:"installed"`
+	ADBResponsive        bool   `json:"adbResponsive"`
+	State                string `json:"state"`
+	Message              string `json:"message"`
+	ErrorCode            string `json:"errorCode,omitempty"`
+	InstalledVersionCode int64  `json:"installedVersionCode,omitempty"`
+	InstalledVersionName string `json:"installedVersionName,omitempty"`
+	RequiredVersionCode  int64  `json:"requiredVersionCode,omitempty"`
+	RequiredVersionName  string `json:"requiredVersionName,omitempty"`
+	UpdateRequired       bool   `json:"updateRequired"`
 }
 
 func (s *Service) ExecuteCompanionCommand(ctx context.Context, deviceID, capabilityID, operation string, args map[string]any) (string, error) {
+	if _, err := s.EnsureConfiguredCompanion(ctx, deviceID, "command"); err != nil {
+		return "", err
+	}
+	return s.executeCompanionCommand(ctx, deviceID, capabilityID, operation, args)
+}
+
+func (s *Service) executeCompanionCommand(ctx context.Context, deviceID, capabilityID, operation string, args map[string]any) (string, error) {
 	if strings.TrimSpace(capabilityID) == "" || strings.TrimSpace(operation) == "" {
 		return "", apperror.New("COMPANION_COMMAND_INVALID", "Companion 能力或操作为空", "device.companion", false)
 	}
@@ -63,6 +75,9 @@ func (s *Service) ExecuteCompanionCommand(ctx context.Context, deviceID, capabil
 }
 
 func (s *Service) CompanionCapabilities(ctx context.Context, deviceID string) (CompanionCollectionAccess, error) {
+	if _, err := s.EnsureConfiguredCompanion(ctx, deviceID, "capabilities"); err != nil {
+		return CompanionCollectionAccess{}, err
+	}
 	var capabilities []map[string]any
 	err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities)
 	if err == nil {
@@ -81,6 +96,9 @@ func (s *Service) CompanionCapabilities(ctx context.Context, deviceID string) (C
 }
 
 func (s *Service) CompanionPermissions(ctx context.Context, deviceID string) (CompanionCollectionAccess, error) {
+	if _, err := s.EnsureConfiguredCompanion(ctx, deviceID, "permissions"); err != nil {
+		return CompanionCollectionAccess{}, err
+	}
 	var permissions []map[string]any
 	err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions)
 	if err == nil {
@@ -95,6 +113,9 @@ func (s *Service) CompanionPermissions(ctx context.Context, deviceID string) (Co
 }
 
 func (s *Service) InvokeCompanionCapability(ctx context.Context, deviceID, capabilityID, operation string, args map[string]any) (map[string]any, string, error) {
+	if _, err := s.EnsureConfiguredCompanion(ctx, deviceID, "invoke"); err != nil {
+		return nil, CompanionTransportADBBroadcast, err
+	}
 	var result map[string]any
 	err := s.core.Call(ctx, "device.invoke", map[string]any{
 		"deviceId": deviceID, "capabilityId": capabilityID, "operation": operation, "args": args,
@@ -106,7 +127,7 @@ func (s *Service) InvokeCompanionCapability(ctx context.Context, deviceID, capab
 		return nil, CompanionTransportQUIC, err
 	}
 
-	payload, err := s.ExecuteCompanionCommand(ctx, deviceID, capabilityID, operation, args)
+	payload, err := s.executeCompanionCommand(ctx, deviceID, capabilityID, operation, args)
 	if err != nil {
 		return nil, CompanionTransportADBBroadcast, err
 	}
@@ -139,38 +160,51 @@ func validateCompanionCommandResult(payload string) error {
 }
 
 func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (CompanionStatus, error) {
-	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "pm", "list", "packages", companionPackageName))
+	packageInfo, err := s.ProbeCompanionPackage(ctx, deviceID)
 	if err != nil {
 		return CompanionStatus{}, err
 	}
-	if !strings.Contains(output.Stdout, "package:"+companionPackageName) {
+	requirement := s.companionRequirement
+	status := CompanionStatus{
+		Installed:            packageInfo.Installed,
+		InstalledVersionCode: packageInfo.VersionCode,
+		InstalledVersionName: packageInfo.VersionName,
+		RequiredVersionCode:  requirement.VersionCode,
+		RequiredVersionName:  requirement.VersionName,
+		UpdateRequired:       requirement.configured() && (!packageInfo.Installed || packageInfo.VersionCode < requirement.VersionCode),
+	}
+	if !packageInfo.Installed {
 		return CompanionStatus{
-			Installed: false,
-			State:     "missing",
-			Message:   "设备未安装 ADBControl Companion。",
+			Installed:           false,
+			State:               "missing",
+			Message:             "设备未安装 ADBControl Companion。",
+			RequiredVersionCode: status.RequiredVersionCode,
+			RequiredVersionName: status.RequiredVersionName,
+			UpdateRequired:      status.UpdateRequired,
 		}, nil
+	}
+	if status.UpdateRequired {
+		status.State = "outdated"
+		status.Message = "设备上的伴侣版本过旧，需要覆盖升级后才能使用完整能力。"
+		return status, nil
 	}
 
 	// `accessibility.status` is the Companion's side-effect-free readiness probe:
 	// it only reports service readiness and must not open an Activity or Android
 	// settings page. This is important for broken-screen/external-display devices
 	// where repeated foreground launches can interrupt control.
-	_, err = s.ExecuteCompanionCommand(ctx, deviceID, "android.accessibility.control", "accessibility.status", map[string]any{})
+	_, err = s.executeCompanionCommand(ctx, deviceID, "android.accessibility.control", "accessibility.status", map[string]any{})
 	if err != nil {
-		return CompanionStatus{
-			Installed:     true,
-			ADBResponsive: false,
-			State:         "adb-unreachable",
-			Message:       "伴侣应用已安装，但 ADB broadcast 探测未返回结果。",
-			ErrorCode:     companionErrorCode(err),
-		}, nil
+		status.ADBResponsive = false
+		status.State = "adb-unreachable"
+		status.Message = "伴侣应用已安装，但 ADB broadcast 探测未返回结果。"
+		status.ErrorCode = companionErrorCode(err)
+		return status, nil
 	}
-	return CompanionStatus{
-		Installed:     true,
-		ADBResponsive: true,
-		State:         "adb-responsive",
-		Message:       "伴侣应用已安装，且 ADB broadcast 探测可达。",
-	}, nil
+	status.ADBResponsive = true
+	status.State = "adb-responsive"
+	status.Message = "伴侣应用已安装，且 ADB broadcast 探测可达。"
+	return status, nil
 }
 
 func (s *Service) readCompanionCommandResult(ctx context.Context, deviceID, requestID string) (string, error) {

@@ -4,7 +4,7 @@ import { CheckCircle2, Download, KeyRound, Play, RefreshCw, ShieldAlert, Smartph
 import UiSelect from '@/components/common/UiSelect.vue'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
-import type { CompanionStatus } from '@/types/api'
+import type { CompanionStatus, CompanionUpgradeResult } from '@/types/api'
 
 const props = defineProps<{ deviceId: string }>()
 const ui = useUiStore()
@@ -24,6 +24,7 @@ const statusTone = computed(() => {
   if (quicConnected.value) return 'connected'
   if (status.value?.adbResponsive) return 'adb'
   if (status.value?.installed === false) return 'missing'
+  if (status.value?.updateRequired) return 'warning'
   return 'warning'
 })
 const statusTitle = computed(() => {
@@ -31,33 +32,59 @@ const statusTitle = computed(() => {
   if (adbCompatibilityMode.value) return '伴侣 ADB 兼容通道已连接'
   if (status.value?.adbResponsive) return '伴侣 App ADB 可达'
   if (status.value?.installed === false) return '未安装伴侣应用'
+  if (status.value?.updateRequired) return '伴侣版本需要升级'
   return '等待伴侣连接'
 })
 const statusMessage = computed(() => {
   if (quicConnected.value) return '已通过原 Core/QUIC 同步能力目录，可以使用完整伴侣能力。'
   if (adbCompatibilityMode.value) return 'QUIC 会话尚未建立；能力目录来自 Rust Core，操作将通过与 Windows 客户端一致的 ADB broadcast 通道执行并逐项校验权限。'
   if (status.value?.adbResponsive) return 'App 已安装且 broadcast 探测正常；如果能力目录为空，请在手机端确认 Companion 服务与权限。'
+  if (status.value?.installed === false) return status.value.message || '设备在线后，服务端将自动安装内置 Companion APK。'
+  if (status.value?.updateRequired) return `设备版本 ${status.value.installedVersionName || status.value.installedVersionCode || '未知'}，服务端要求 ${status.value.requiredVersionName || status.value.requiredVersionCode}；在线后将自动安全覆盖升级。`
   return status.value?.message || '请按流程安装、打开并授权 Companion。'
 })
 
 async function load() {
   loading.value = true
   companionError.value = ''
-  const [statusResult, capabilitiesResult, permissionsResult] = await Promise.allSettled([
-    api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`),
-    api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/capabilities`),
-    api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/permissions`),
-  ])
-  if (statusResult.status === 'fulfilled') status.value = statusResult.value
-  else companionError.value = `${toAppError(statusResult.reason).message}（${toAppError(statusResult.reason).errorCode}）`
-  capabilities.value = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : []
-  permissions.value = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
-  const syncError = capabilitiesResult.status === 'rejected' ? capabilitiesResult.reason : permissionsResult.status === 'rejected' ? permissionsResult.reason : null
-  if (syncError) {
-    const appError = toAppError(syncError)
-    companionError.value = companionError.value || `能力同步失败：${appError.message}（${appError.errorCode}）`
+  let ensured = true
+  try {
+    const upgrade = await api<CompanionUpgradeResult>(`/devices/${encodeURIComponent(props.deviceId)}/companion/ensure`, { method: 'POST', body: '{}' })
+    if (upgrade.updated) {
+      ui.notify('伴侣已自动升级', `${upgrade.previousVersionName || '未安装'} → ${upgrade.installedVersionName}`, 'success')
+    }
+  } catch (error) {
+    ensured = false
+    const appError = toAppError(error)
+    companionError.value = `伴侣检查失败：${appError.message}（${appError.errorCode}）`
   }
-  loading.value = false
+  try {
+    if (!ensured) {
+      capabilities.value = []
+      permissions.value = []
+      status.value = await api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`)
+      return
+    }
+    const [statusResult, capabilitiesResult, permissionsResult] = await Promise.allSettled([
+      api<CompanionStatus>(`/devices/${encodeURIComponent(props.deviceId)}/companion/status`),
+      api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/capabilities`),
+      api<Array<Record<string, any>>>(`/devices/${encodeURIComponent(props.deviceId)}/permissions`),
+    ])
+    if (statusResult.status === 'fulfilled') status.value = statusResult.value
+    else companionError.value = companionError.value || `${toAppError(statusResult.reason).message}（${toAppError(statusResult.reason).errorCode}）`
+    capabilities.value = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : []
+    permissions.value = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
+    const syncError = capabilitiesResult.status === 'rejected' ? capabilitiesResult.reason : permissionsResult.status === 'rejected' ? permissionsResult.reason : null
+    if (syncError) {
+      const appError = toAppError(syncError)
+      companionError.value = companionError.value || `能力同步失败：${appError.message}（${appError.errorCode}）`
+    }
+  } catch (error) {
+    const appError = toAppError(error)
+    companionError.value = companionError.value || `${appError.message}（${appError.errorCode}）`
+  } finally {
+    loading.value = false
+  }
 }
 
 function permissionFor(id: string) { return permissions.value.find(item => item.capabilityId === id) }
@@ -68,7 +95,11 @@ function permissionLabel(id: string) {
 }
 
 async function install() {
-  try { await api(`/devices/${encodeURIComponent(props.deviceId)}/companion/install`, { method: 'POST', body: '{}' }); ui.notify('伴侣应用已安装', '请在设备上打开 ADBControl Companion 并按提示授权。', 'success') }
+  try {
+    const result = await api<CompanionUpgradeResult>(`/devices/${encodeURIComponent(props.deviceId)}/companion/install`, { method: 'POST', body: '{}' })
+    ui.notify('伴侣应用已覆盖安装', `设备版本：${result.installedVersionName || result.installedVersionCode}`, 'success')
+    await load()
+  }
   catch (error) { ui.failure(toAppError(error)) }
 }
 
@@ -116,6 +147,7 @@ onMounted(load)
         <div class="mt-4 rounded-lg border px-3 py-2 text-xs" :class="statusTone === 'connected' ? 'border-brand-200 bg-brand-50 text-brand-800 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300' : statusTone === 'adb' ? 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200' : statusTone === 'missing' ? 'border-slate-200 bg-slate-50 text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300'">
           <span class="font-semibold">{{ statusTitle }}</span>
           <span class="ml-1">{{ statusMessage }}</span>
+          <span v-if="status?.installedVersionCode" class="ml-1 font-mono">v{{ status.installedVersionName || '?' }} ({{ status.installedVersionCode }})</span>
           <span v-if="companionError" class="ml-1">诊断：{{ companionError }}</span>
         </div>
       </div>

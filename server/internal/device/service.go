@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
@@ -29,9 +31,28 @@ type CommandOutput struct {
 	Stderr   string `json:"stderr"`
 }
 
-type Service struct{ core coreipc.Caller }
+type Service struct {
+	core                  coreipc.Caller
+	companionRequirement  CompanionRequirement
+	companionUpgradeLocks sync.Map
+	logger                *slog.Logger
+}
 
-func NewService(core coreipc.Caller) *Service { return &Service{core: core} }
+type ServiceOption func(*Service)
+
+func WithCompanionRequirement(requirement CompanionRequirement) ServiceOption {
+	return func(service *Service) { service.companionRequirement = requirement }
+}
+
+func NewService(core coreipc.Caller, options ...ServiceOption) *Service {
+	service := &Service{core: core}
+	for _, option := range options {
+		option(service)
+	}
+	return service
+}
+
+func (s *Service) SetLogger(logger *slog.Logger) { s.logger = logger }
 
 func (s *Service) Exec(ctx context.Context, args []string) (CommandOutput, error) {
 	for _, arg := range args {
@@ -209,7 +230,7 @@ func parseDevices(output string) []Device {
 			continue
 		}
 		deviceID := strings.Join(fields[:stateIndex], " ")
-		device := Device{ID: deviceID, Name: deviceID, State: strings.Join(fields[stateIndex : stateIndex+stateWidth], " "), Transport: "usb"}
+		device := Device{ID: deviceID, Name: deviceID, State: strings.Join(fields[stateIndex:stateIndex+stateWidth], " "), Transport: "usb"}
 		if isWirelessADBIdentity(device.ID) {
 			device.Transport = "wireless"
 		}

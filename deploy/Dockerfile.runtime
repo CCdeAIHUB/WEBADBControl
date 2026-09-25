@@ -21,6 +21,8 @@ ENV WEBADB_ADDRESS=0.0.0.0:8080 \
     WEBADB_DATA_DIR=/opt/webadbcontrol/data \
     WEBADB_WEB_DIR=/opt/webadbcontrol/web \
     WEBADB_COMPANION_APK=/opt/webadbcontrol/companion.apk \
+    WEBADB_COMPANION_VERSION_CODE=13 \
+    WEBADB_COMPANION_VERSION_NAME=0.13.0 \
     HOME=/opt/webadbcontrol/data
 
 EXPOSE 8080
