@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Bot, Boxes, ChevronLeft, ClipboardList, LayoutDashboard, LogOut, Menu, Settings, Smartphone,
@@ -7,26 +7,58 @@ import {
 } from 'lucide-vue-next'
 import { logout } from '@/services/auth'
 import { api, toAppError } from '@/services/api'
+import { createDevicePresenceSync } from '@/services/devicePresenceSync'
 import { synchronizeTheme } from '@/services/theme'
+import { useDevicesStore } from '@/stores/devices'
 import { useUiStore } from '@/stores/ui'
 import type { AppSettings } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
+const devices = useDevicesStore()
 const isPublic = computed(() => route.meta.public === true)
 let themeSynchronized = false
+let devicePresenceSync: ReturnType<typeof createDevicePresenceSync> | undefined
+
+function applySettings(settings: AppSettings) {
+  synchronizeTheme(settings.theme)
+  themeSynchronized = true
+  devicePresenceSync?.stop()
+  devicePresenceSync = createDevicePresenceSync({
+    intervalSeconds: settings.refreshSeconds,
+    refresh: () => devices.refresh(undefined, { background: true }),
+  })
+  // Device pages already perform their initial blocking load. The global
+  // scheduler owns subsequent presence changes without issuing a duplicate ADB query.
+  devicePresenceSync.start(false)
+}
 
 watch(() => route.name, async () => {
-  if (!route.name || isPublic.value || themeSynchronized) return
+  if (!route.name || isPublic.value) {
+    devicePresenceSync?.stop()
+    themeSynchronized = false
+    return
+  }
+  if (themeSynchronized) return
   try {
     const settings = await api<AppSettings>('/settings')
-    synchronizeTheme(settings.theme)
-    themeSynchronized = true
+    applySettings(settings)
   } catch (error) {
     ui.failure(toAppError(error))
   }
 }, { immediate: true })
+
+function handleSettingsUpdated(event: Event) {
+  const settings = (event as CustomEvent<AppSettings>).detail
+  if (settings) applySettings(settings)
+}
+
+onMounted(() => window.addEventListener('webadb:settings-updated', handleSettingsUpdated))
+onBeforeUnmount(() => {
+  window.removeEventListener('webadb:settings-updated', handleSettingsUpdated)
+  devicePresenceSync?.stop()
+})
 
 async function signOut() {
   try { await logout() } finally { await router.replace('/login') }

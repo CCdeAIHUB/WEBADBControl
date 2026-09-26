@@ -32,4 +32,20 @@ describe('devices store', () => {
     expect(store.devices[0]?.state).toBe('online')
     expect(store.devices[0]?.transport).toBe('wireless')
   })
+
+  it('keeps existing cards visible when a background refresh temporarily fails', async () => {
+    // 场景：自动轮询遇到瞬时网络错误时保留最后一次设备快照，不能让设备卡片闪烁或消失。
+    const store = useDevicesStore()
+    store.devices = [{ id: 'one', name: 'Phone', state: 'online', transport: 'wireless' }]
+    store.status = 'ready'
+
+    await store.refresh(
+      vi.fn().mockRejectedValue({ errorCode: 'NETWORK_ERROR', message: '网络波动', module: 'api.client', recoverable: true, traceId: 'trace-bg' }),
+      { background: true },
+    )
+
+    expect(store.status).toBe('ready')
+    expect(store.devices).toHaveLength(1)
+    expect(store.error?.errorCode).toBe('NETWORK_ERROR')
+  })
 })

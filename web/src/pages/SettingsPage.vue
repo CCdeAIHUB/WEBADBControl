@@ -56,6 +56,7 @@ async function save() {
     settings.value = await api('/settings', { method: 'PUT', body: JSON.stringify(settings.value) })
     synchronizeTheme(settings.value.theme)
     savedRemoteSignature.value = remoteSignature(settings.value)
+    window.dispatchEvent(new CustomEvent('webadb:settings-updated', { detail: settings.value }))
     ui.notify('设置已保存', remoteChanged ? '界面设置已生效；网络监听设置会在服务重启后生效。' : '新的配置已立即生效。', 'success')
   } catch (error) {
     ui.failure(toAppError(error))

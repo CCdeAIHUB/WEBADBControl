@@ -3,6 +3,7 @@ import { api, toAppError } from '@/services/api'
 import type { AppError, Device } from '@/types/api'
 
 type DeviceRequest = () => Promise<Device[]>
+type RefreshOptions = { background?: boolean }
 
 export const useDevicesStore = defineStore('devices', {
   state: () => ({
@@ -15,17 +16,20 @@ export const useDevicesStore = defineStore('devices', {
     online: (state) => state.devices.filter((device) => ['device', 'online'].includes(device.state)),
   },
   actions: {
-    async refresh(request: DeviceRequest = () => api<Device[]>('/devices')) {
-      this.status = 'loading'
+    async refresh(request: DeviceRequest = () => api<Device[]>('/devices'), options: RefreshOptions = {}) {
+      const background = options.background === true && this.status === 'ready'
+      if (!background) this.status = 'loading'
       this.error = null
       try {
         this.devices = await request()
         this.status = 'ready'
         this.lastUpdated = new Date()
       } catch (error) {
-        this.devices = []
         this.error = toAppError(error)
-        this.status = 'error'
+        if (!background) {
+          this.devices = []
+          this.status = 'error'
+        }
       }
     },
     async connect(endpoint: string) {
