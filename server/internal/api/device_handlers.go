@@ -513,6 +513,15 @@ func (s *Server) installCompanion(writer http.ResponseWriter, request *http.Requ
 	writeData(writer, http.StatusOK, result)
 }
 
+func (s *Server) reinstallCompanion(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.devices.ReinstallConfiguredCompanion(request.Context(), request.PathValue("id"), "signature-mismatch-confirmed")
+	if err != nil {
+		writeError(writer, companionUpgradeHTTPStatus(err), err)
+		return
+	}
+	writeData(writer, http.StatusOK, result)
+}
+
 func (s *Server) ensureCompanion(writer http.ResponseWriter, request *http.Request) {
 	result, err := s.devices.CheckConfiguredCompanion(request.Context(), request.PathValue("id"), "web-preflight")
 	if err != nil {
@@ -530,7 +539,7 @@ func companionUpgradeHTTPStatus(err error) int {
 	switch appErr.ErrorCode {
 	case "COMPANION_APK_MISSING":
 		return http.StatusServiceUnavailable
-	case "COMPANION_SIGNATURE_MISMATCH":
+	case "COMPANION_SIGNATURE_MISMATCH", "COMPANION_REINSTALL_REQUIRED":
 		return http.StatusConflict
 	default:
 		return http.StatusBadGateway

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Expand, Home, LoaderCircle, Minimize2, MousePointer2, Play, Power, RotateCcw, SlidersHorizontal, Square, StopCircle, Volume1, Volume2 } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
+import { companionReinstallDescription, companionReinstallRequired } from '@/services/companionInstall'
 import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { screenGestureAction, type ScreenGestureStart, type ScreenPoint } from '@/services/screenControl'
@@ -26,6 +27,8 @@ const controlTransport = ref<'scrcpy-control' | 'companion-accessibility'>('scrc
 const streamProtocol = ref(1)
 const isFullscreen = ref(false)
 const companionPrompt = ref(false)
+const companionReinstallPrompt = ref(false)
+const companionReinstallError = ref<ReturnType<typeof toAppError> | null>(null)
 const companionInstalling = ref(false)
 const pendingCompanionAction = ref<Record<string, unknown> | null>(null)
 const activePointers = new Set<number>()
@@ -206,6 +209,33 @@ async function installCompanionAndRetry() {
     lastActionAt = 0
     if (pending) await sendAction(pending)
   } catch (error) {
+    const appError = toAppError(error)
+    if (companionReinstallRequired(appError)) {
+      companionPrompt.value = false
+      companionReinstallError.value = appError
+      companionReinstallPrompt.value = true
+    } else {
+      ui.failure(appError)
+    }
+  } finally {
+    companionInstalling.value = false
+  }
+}
+
+async function reinstallCompanionAndRetry() {
+  if (companionInstalling.value) return
+  companionInstalling.value = true
+  try {
+    const result = await api<{ installedVersionName?: string; installedVersionCode: number }>(`/devices/${encodeURIComponent(props.deviceId)}/companion/reinstall`, { method: 'POST', body: '{}' })
+    companionReinstallPrompt.value = false
+    companionReinstallError.value = null
+    ui.notify('伴侣应用已重新安装', `设备版本：${result.installedVersionName || result.installedVersionCode}；请重新授予伴侣权限，正在重试控制操作。`, 'success')
+    const pending = pendingCompanionAction.value
+    pendingCompanionAction.value = null
+    actionInFlight = false
+    lastActionAt = 0
+    if (pending) await sendAction(pending)
+  } catch (error) {
     ui.failure(toAppError(error))
   } finally {
     companionInstalling.value = false
@@ -267,7 +297,7 @@ function sendTouch(pointerId: number, action: number, point: ScreenPoint) {
 
 function queueGestureAction(payload: Record<string, unknown>) {
   gestureActionQueue = gestureActionQueue.then(async () => {
-    if (companionPrompt.value) return
+    if (companionPrompt.value || companionReinstallPrompt.value) return
     try {
       await api(`/devices/${encodeURIComponent(props.deviceId)}/actions`, { method: 'POST', body: JSON.stringify(payload) })
     } catch (error) {
@@ -387,5 +417,14 @@ onBeforeUnmount(() => {
     :confirm-text="companionInstalling ? '正在安装…' : '安装 / 覆盖安装'"
     @cancel="companionPrompt = false; pendingCompanionAction = null"
     @confirm="installCompanionAndRetry"
+  />
+  <ConfirmDialog
+    :open="companionReinstallPrompt"
+    title="无法覆盖安装伴侣应用"
+    :description="companionReinstallDescription(companionReinstallError)"
+    :confirm-text="companionInstalling ? '正在重新安装…' : '卸载旧版并重新安装'"
+    destructive
+    @cancel="companionReinstallPrompt = false; companionReinstallError = null; pendingCompanionAction = null"
+    @confirm="reinstallCompanionAndRetry"
   />
 </template>

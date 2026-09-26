@@ -4,8 +4,9 @@ import { CheckCircle2, Download, KeyRound, Play, RefreshCw, ShieldAlert, Smartph
 import UiSelect from '@/components/common/UiSelect.vue'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 import { api, toAppError } from '@/services/api'
+import { companionReinstallDescription, companionReinstallRequired } from '@/services/companionInstall'
 import { useUiStore } from '@/stores/ui'
-import type { CompanionStatus, CompanionUpgradeResult } from '@/types/api'
+import type { AppError, CompanionStatus, CompanionUpgradeResult } from '@/types/api'
 
 const props = defineProps<{ deviceId: string }>()
 const ui = useUiStore()
@@ -19,6 +20,8 @@ const operation = ref('')
 const argumentsJson = ref('{}')
 const companionError = ref('')
 const installPrompt = ref(false)
+const reinstallPrompt = ref(false)
+const reinstallError = ref<AppError | null>(null)
 const installing = ref(false)
 const retryAfterInstall = ref<null | (() => Promise<void>)>(null)
 
@@ -100,8 +103,36 @@ async function install() {
     retryAfterInstall.value = null
     if (retry) await retry()
   }
-  catch (error) { ui.failure(toAppError(error)) }
+  catch (error) {
+    const appError = toAppError(error)
+    if (companionReinstallRequired(appError)) {
+      installPrompt.value = false
+      reinstallError.value = appError
+      reinstallPrompt.value = true
+    } else {
+      ui.failure(appError)
+    }
+  }
   finally { installing.value = false }
+}
+
+async function reinstall() {
+  if (installing.value) return
+  installing.value = true
+  try {
+    const result = await api<CompanionUpgradeResult>(`/devices/${encodeURIComponent(props.deviceId)}/companion/reinstall`, { method: 'POST', body: '{}' })
+    reinstallPrompt.value = false
+    reinstallError.value = null
+    ui.notify('伴侣应用已重新安装', `设备版本：${result.installedVersionName || result.installedVersionCode}；应用数据已清除，需要重新授予相关权限。`, 'success')
+    await load()
+    const retry = retryAfterInstall.value
+    retryAfterInstall.value = null
+    if (retry) await retry()
+  } catch (error) {
+    ui.failure(toAppError(error))
+  } finally {
+    installing.value = false
+  }
 }
 
 function requestInstall(error: unknown, retry?: () => Promise<void>) {
@@ -182,5 +213,14 @@ onMounted(load)
     :confirm-text="installing ? '正在安装…' : status?.installed === false ? '安装伴侣 App' : '覆盖安装伴侣 App'"
     @cancel="installPrompt = false; retryAfterInstall = null"
     @confirm="install"
+  />
+  <ConfirmDialog
+    :open="reinstallPrompt"
+    title="无法覆盖安装伴侣应用"
+    :description="companionReinstallDescription(reinstallError)"
+    :confirm-text="installing ? '正在重新安装…' : '卸载旧版并重新安装'"
+    destructive
+    @cancel="reinstallPrompt = false; reinstallError = null; retryAfterInstall = null"
+    @confirm="reinstall"
   />
 </template>

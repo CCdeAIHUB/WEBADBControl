@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	CompanionUpgradeReady     = "ready"
-	CompanionUpgradeMissing   = "missing"
-	CompanionUpgradeOutdated  = "outdated"
-	CompanionUpgradeInstalled = "installed"
-	CompanionUpgradeUpdated   = "updated"
+	CompanionUpgradeReady       = "ready"
+	CompanionUpgradeMissing     = "missing"
+	CompanionUpgradeOutdated    = "outdated"
+	CompanionUpgradeInstalled   = "installed"
+	CompanionUpgradeUpdated     = "updated"
+	CompanionUpgradeReinstalled = "reinstalled"
 )
 
 type CompanionRequirement struct {
@@ -117,6 +118,64 @@ func (s *Service) ForceInstallConfiguredCompanion(ctx context.Context, deviceID,
 	return s.installCompanion(ctx, deviceID, trigger)
 }
 
+// ReinstallConfiguredCompanion performs the destructive recovery path only
+// after the web client has obtained explicit user confirmation. It validates
+// the bundled APK before touching the package currently installed on Android.
+func (s *Service) ReinstallConfiguredCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
+	requirement := s.companionRequirement
+	if !requirement.configured() {
+		return CompanionUpgradeResult{}, apperror.New("COMPANION_REQUIREMENT_NOT_CONFIGURED", "服务器未配置伴侣版本能力基线", "companion.upgrade", false)
+	}
+
+	lockValue, _ := s.companionUpgradeLocks.LoadOrStore(deviceID, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	started := time.Now()
+	if _, err := os.Stat(requirement.APKPath); err != nil {
+		upgradeErr := apperror.Wrap("COMPANION_APK_MISSING", "服务器未打包 Android 伴侣应用", "companion.upgrade", false, err)
+		s.logCompanionUpgrade("companion_reinstall_failed", deviceID, trigger, CompanionUpgradeResult{}, time.Since(started), upgradeErr)
+		return CompanionUpgradeResult{}, upgradeErr
+	}
+	current, err := s.ProbeCompanionPackage(ctx, deviceID)
+	if err != nil {
+		return CompanionUpgradeResult{}, err
+	}
+	result := companionUpgradeResult(requirement, current)
+	if current.Installed {
+		output, uninstallErr := s.Exec(ctx, DeviceArgs(deviceID, "uninstall", companionPackageName))
+		if uninstallErr != nil {
+			reinstallErr := companionUninstallError(output, uninstallErr)
+			s.logCompanionUpgrade("companion_uninstall_failed", deviceID, trigger, result, time.Since(started), reinstallErr)
+			return CompanionUpgradeResult{}, reinstallErr
+		}
+	}
+	output, installErr := s.Exec(ctx, DeviceArgs(deviceID, "install", requirement.APKPath))
+	if installErr != nil {
+		reinstallErr := companionReinstallError(output, installErr)
+		s.logCompanionUpgrade("companion_reinstall_failed", deviceID, trigger, result, time.Since(started), reinstallErr)
+		return CompanionUpgradeResult{}, reinstallErr
+	}
+	installed, err := s.ProbeCompanionPackage(ctx, deviceID)
+	if err != nil || !installed.Installed || installed.VersionCode < requirement.VersionCode {
+		cause := err
+		if cause == nil {
+			cause = fmt.Errorf("installed versionCode %d, required %d", installed.VersionCode, requirement.VersionCode)
+		}
+		reinstallErr := apperror.Wrap("COMPANION_REINSTALL_VERIFY_FAILED", "重新安装后伴侣版本仍不满足能力要求", "companion.upgrade", true, cause).
+			WithSuggestion("请保持无线调试在线后重试安装；旧伴侣应用已经卸载")
+		s.logCompanionUpgrade("companion_reinstall_verify_failed", deviceID, trigger, result, time.Since(started), reinstallErr)
+		return CompanionUpgradeResult{}, reinstallErr
+	}
+	result.State = CompanionUpgradeReinstalled
+	result.Updated = true
+	result.InstalledVersionCode = installed.VersionCode
+	result.InstalledVersionName = installed.VersionName
+	s.logCompanionUpgrade("companion_reinstall_completed", deviceID, trigger, result, time.Since(started), nil)
+	return result, nil
+}
+
 func (s *Service) CheckConfiguredCompanion(ctx context.Context, deviceID, trigger string) (CompanionUpgradeResult, error) {
 	requirement := s.companionRequirement
 	if !requirement.configured() {
@@ -213,8 +272,11 @@ func companionInstallError(output CommandOutput, cause error) error {
 	detail := strings.ToLower(strings.TrimSpace(output.Stderr + "\n" + output.Stdout))
 	switch {
 	case strings.Contains(detail, "install_failed_update_incompatible") || strings.Contains(detail, "signatures do not match"):
-		return apperror.Wrap("COMPANION_SIGNATURE_MISMATCH", "Android 拒绝覆盖：设备中仍存在不同签名的伴侣应用", "companion.upgrade", false, cause).
-			WithSuggestion("这不是普通版本差异。请在当前用户和工作资料中完整卸载旧伴侣后重试；为保护数据，系统不会自动卸载")
+		return apperror.Wrap("COMPANION_SIGNATURE_MISMATCH", "Android 拒绝覆盖：设备中仍存在不同签名的伴侣应用", "companion.upgrade", true, cause).
+			WithSuggestion("需要先卸载旧伴侣。系统会在你明确确认后执行卸载和重新安装")
+	case strings.Contains(detail, "install_failed_version_downgrade"):
+		return apperror.Wrap("COMPANION_REINSTALL_REQUIRED", "Android 不允许直接覆盖当前伴侣版本", "companion.upgrade", true, cause).
+			WithSuggestion("需要先卸载旧伴侣。系统会在你明确确认后执行卸载和重新安装")
 	case strings.Contains(detail, "device offline") || strings.Contains(detail, "device not found"):
 		return apperror.Wrap("COMPANION_UPGRADE_DEVICE_OFFLINE", "伴侣升级时设备已离线", "companion.upgrade", true, cause).
 			WithSuggestion("请保持无线调试页面开启并重新连接后重试")
@@ -222,6 +284,26 @@ func companionInstallError(output CommandOutput, cause error) error {
 		return apperror.Wrap("COMPANION_UPGRADE_FAILED", "伴侣覆盖安装失败", "companion.upgrade", true, cause).
 			WithSuggestion(strings.TrimSpace(output.Stderr + " " + output.Stdout))
 	}
+}
+
+func companionUninstallError(output CommandOutput, cause error) error {
+	detail := strings.ToLower(strings.TrimSpace(output.Stderr + "\n" + output.Stdout))
+	if strings.Contains(detail, "device offline") || strings.Contains(detail, "device not found") {
+		return apperror.Wrap("COMPANION_REINSTALL_DEVICE_OFFLINE", "卸载旧伴侣时设备已离线", "companion.upgrade", true, cause).
+			WithSuggestion("旧伴侣未被卸载；请恢复无线调试连接后重试")
+	}
+	return apperror.Wrap("COMPANION_UNINSTALL_FAILED", "无法卸载旧版伴侣应用", "companion.upgrade", true, cause).
+		WithSuggestion(strings.TrimSpace(output.Stderr + " " + output.Stdout))
+}
+
+func companionReinstallError(output CommandOutput, cause error) error {
+	detail := strings.ToLower(strings.TrimSpace(output.Stderr + "\n" + output.Stdout))
+	if strings.Contains(detail, "device offline") || strings.Contains(detail, "device not found") {
+		return apperror.Wrap("COMPANION_REINSTALL_DEVICE_OFFLINE", "重新安装伴侣时设备已离线", "companion.upgrade", true, cause).
+			WithSuggestion("旧伴侣可能已卸载；请恢复无线调试连接后再次安装")
+	}
+	return apperror.Wrap("COMPANION_REINSTALL_FAILED", "旧伴侣已卸载，但新版伴侣安装失败", "companion.upgrade", true, cause).
+		WithSuggestion(strings.TrimSpace(output.Stderr + " " + output.Stdout))
 }
 
 func (s *Service) logCompanionUpgrade(event, deviceID, trigger string, result CompanionUpgradeResult, duration time.Duration, err error) {

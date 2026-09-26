@@ -71,4 +71,38 @@ describe('companion lifecycle preflight', () => {
     expect(notifyMock).toHaveBeenCalledWith('伴侣应用已覆盖安装', '设备版本：0.13.0', 'success')
     wrapper.unmount()
   })
+
+  it('asks before uninstalling and reinstalling a companion with a conflicting signature', async () => {
+    // 场景：覆盖安装遇到签名冲突时先停下，只有用户再次确认清除旧 App 后才调用重装接口。
+    let replaced = false
+    apiMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/companion/status')) return replaced
+        ? { installed: true, adbResponsive: true, state: 'adb-responsive', message: 'ready', updateRequired: false }
+        : { installed: true, installedVersionCode: 11, requiredVersionCode: 13, adbResponsive: false, state: 'outdated', message: '版本过旧', updateRequired: true }
+      if (path.endsWith('/companion/install')) throw { errorCode: 'COMPANION_SIGNATURE_MISMATCH', message: '签名不一致', module: 'companion.upgrade', recoverable: false, traceId: 'test' }
+      if (path.endsWith('/companion/reinstall')) {
+        replaced = true
+        return { state: 'reinstalled', updated: true, installedVersionCode: 13, installedVersionName: '0.13.0' }
+      }
+      return []
+    })
+
+    const wrapper = mount(CompanionPanel, { props: { deviceId: 'phone' } })
+    await flushPromises()
+    const install = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('覆盖安装伴侣 App'))
+    ;(install as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('无法覆盖安装伴侣应用')
+    expect(document.body.textContent).toContain('清除伴侣应用数据')
+    expect(apiMock.mock.calls.map(call => call[0])).not.toContain('/devices/phone/companion/reinstall')
+
+    const replace = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('卸载旧版并重新安装'))
+    ;(replace as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(apiMock.mock.calls.map(call => call[0])).toContain('/devices/phone/companion/reinstall')
+    expect(notifyMock).toHaveBeenCalledWith('伴侣应用已重新安装', expect.stringContaining('需要重新授予'), 'success')
+    wrapper.unmount()
+  })
 })

@@ -18,7 +18,10 @@ type companionUpgradeCaller struct {
 	versionCode         int64
 	versionName         string
 	installCalls        int
+	uninstallCalls      int
+	commandOrder        []string
 	installOutput       CommandOutput
+	uninstallOutput     CommandOutput
 	keepOldAfterInstall bool
 }
 
@@ -42,8 +45,25 @@ func (c *companionUpgradeCaller) Call(_ context.Context, method string, params a
 		}
 	case strings.Contains(joined, " install -r "):
 		c.installCalls++
+		c.commandOrder = append(c.commandOrder, "install")
 		output = c.installOutput
 		if output.ExitCode == 0 && !c.keepOldAfterInstall {
+			c.installed = true
+			c.versionCode = 13
+			c.versionName = "0.13.0"
+		}
+	case strings.Contains(joined, " uninstall "+companionPackageName):
+		c.uninstallCalls++
+		c.commandOrder = append(c.commandOrder, "uninstall")
+		output = c.uninstallOutput
+		if output.ExitCode == 0 {
+			c.installed = false
+		}
+	case strings.Contains(joined, " install "):
+		c.installCalls++
+		c.commandOrder = append(c.commandOrder, "install")
+		output = c.installOutput
+		if output.ExitCode == 0 {
 			c.installed = true
 			c.versionCode = 13
 			c.versionName = "0.13.0"
@@ -119,8 +139,55 @@ func TestEnsureCompanionNeverUninstallsOnSignatureMismatch(t *testing.T) {
 	if !errors.As(err, &appErr) || appErr.ErrorCode != "COMPANION_SIGNATURE_MISMATCH" {
 		t.Fatalf("error=%v, want COMPANION_SIGNATURE_MISMATCH", err)
 	}
-	if caller.installCalls != 1 {
-		t.Fatalf("installCalls=%d, want 1", caller.installCalls)
+	if caller.installCalls != 1 || caller.uninstallCalls != 0 {
+		t.Fatalf("installCalls=%d uninstallCalls=%d, want 1/0 before user confirmation", caller.installCalls, caller.uninstallCalls)
+	}
+}
+
+func TestReinstallCompanionUninstallsOnlyAfterExplicitConfirmation(t *testing.T) {
+	// 场景：前端已取得用户的破坏性操作确认后，才卸载签名冲突的旧包，再安装内置 APK 并复检。
+	caller := &companionUpgradeCaller{installed: true, versionCode: 11, versionName: "0.11.0"}
+	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
+	result, err := service.ReinstallConfiguredCompanion(context.Background(), "phone", "signature-mismatch-confirmed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated || result.State != CompanionUpgradeReinstalled || result.InstalledVersionCode != 13 {
+		t.Fatalf("unexpected result=%#v", result)
+	}
+	if strings.Join(caller.commandOrder, ",") != "uninstall,install" {
+		t.Fatalf("command order=%v, want uninstall then install", caller.commandOrder)
+	}
+}
+
+func TestReinstallCompanionValidatesAPKBeforeUninstall(t *testing.T) {
+	// 场景：服务端 APK 丢失时绝不能先卸载设备中仍可用的伴侣应用。
+	caller := &companionUpgradeCaller{installed: true, versionCode: 11, versionName: "0.11.0"}
+	service := NewService(caller, WithCompanionRequirement(CompanionRequirement{APKPath: filepath.Join(t.TempDir(), "missing.apk"), VersionCode: 13, VersionName: "0.13.0"}))
+	_, err := service.ReinstallConfiguredCompanion(context.Background(), "phone", "signature-mismatch-confirmed")
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.ErrorCode != "COMPANION_APK_MISSING" {
+		t.Fatalf("error=%v, want COMPANION_APK_MISSING", err)
+	}
+	if caller.uninstallCalls != 0 || caller.installCalls != 0 {
+		t.Fatalf("uninstallCalls=%d installCalls=%d, want 0/0", caller.uninstallCalls, caller.installCalls)
+	}
+}
+
+func TestReinstallCompanionStopsWhenUninstallFails(t *testing.T) {
+	// 场景：卸载阶段失败时保留旧应用并停止流程，不能继续安装造成误导性的二次错误。
+	caller := &companionUpgradeCaller{
+		installed: true, versionCode: 11, versionName: "0.11.0",
+		uninstallOutput: CommandOutput{ExitCode: 1, Stderr: "Failure [DELETE_FAILED_DEVICE_POLICY_MANAGER]"},
+	}
+	service := NewService(caller, WithCompanionRequirement(testCompanionRequirement(t)))
+	_, err := service.ReinstallConfiguredCompanion(context.Background(), "phone", "signature-mismatch-confirmed")
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.ErrorCode != "COMPANION_UNINSTALL_FAILED" {
+		t.Fatalf("error=%v, want COMPANION_UNINSTALL_FAILED", err)
+	}
+	if caller.uninstallCalls != 1 || caller.installCalls != 0 || !caller.installed {
+		t.Fatalf("uninstallCalls=%d installCalls=%d installed=%v", caller.uninstallCalls, caller.installCalls, caller.installed)
 	}
 }
 

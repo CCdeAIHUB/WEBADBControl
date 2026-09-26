@@ -75,4 +75,36 @@ describe('screen fullscreen controls', () => {
     expect(actionAttempts).toBe(2)
     wrapper.unmount()
   })
+
+  it('preserves the pending control action while confirming a signature-conflict reinstall', async () => {
+    // 场景：自动能力补齐遇到签名冲突时，以第二个破坏性确认框接续流程，重装后再重试原控制操作。
+    let actionAttempts = 0
+    apiMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/actions') && actionAttempts++ === 0) {
+        throw { errorCode: 'COMPANION_UPGRADE_REQUIRED', message: '需要新版伴侣', module: 'companion.requirement', recoverable: true, traceId: 'test' }
+      }
+      if (path.endsWith('/companion/install')) {
+        throw { errorCode: 'COMPANION_SIGNATURE_MISMATCH', message: '签名不一致', module: 'companion.upgrade', recoverable: false, traceId: 'test' }
+      }
+      if (path.endsWith('/companion/reinstall')) return { state: 'reinstalled', installedVersionCode: 13, installedVersionName: '0.13.0' }
+      return { accepted: true }
+    })
+    const wrapper = mount(ScreenPanel, { props: { deviceId: 'phone', active: false } })
+
+    await wrapper.get('button[title="主页"]').trigger('click')
+    await flushPromises()
+    const install = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('安装 / 覆盖安装'))
+    ;(install as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('无法覆盖安装伴侣应用')
+    expect(apiMock.mock.calls.map(call => call[0])).not.toContain('/devices/phone/companion/reinstall')
+    const replace = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('卸载旧版并重新安装'))
+    ;(replace as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(apiMock.mock.calls.map(call => call[0])).toContain('/devices/phone/companion/reinstall')
+    expect(actionAttempts).toBe(2)
+    wrapper.unmount()
+  })
 })

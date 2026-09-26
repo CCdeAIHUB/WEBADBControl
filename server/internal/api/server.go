@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("GET /api/v1/devices/{id}/companion/status", s.companionStatus)
 	router.HandleFunc("POST /api/v1/devices/{id}/companion/ensure", s.ensureCompanion)
 	router.HandleFunc("POST /api/v1/devices/{id}/companion/install", s.installCompanion)
+	router.HandleFunc("POST /api/v1/devices/{id}/companion/reinstall", s.reinstallCompanion)
 	router.HandleFunc("GET /api/v1/automation/tasks", s.listTasks)
 	router.HandleFunc("POST /api/v1/automation/tasks", s.saveTask)
 	router.HandleFunc("PUT /api/v1/automation/tasks/{id}", s.saveTask)
