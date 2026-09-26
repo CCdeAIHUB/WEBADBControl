@@ -12,7 +12,7 @@ export interface ScreenDecoderEnvironment {
 export interface ScreenDecoder {
   readonly mode: ScreenDecoderMode
   configure(data: Uint8Array): Promise<void>
-  decode(data: Uint8Array, keyframe: boolean): Promise<void>
+  decode(data: Uint8Array, keyframe: boolean, presentationTimeUs?: number): Promise<void>
   dispose(): void
 }
 
@@ -46,6 +46,14 @@ export function screenDecoderFallback(mode: ScreenDecoderMode): ScreenDecoderMod
   return mode === 'software' ? undefined : 'software'
 }
 
+export function screenFrameDurationMs(previousTimeUs: number | undefined, currentTimeUs: number | undefined, fps: number): number {
+  const fallback = Math.max(1, Math.round(1000 / fps))
+  if (previousTimeUs === undefined || currentTimeUs === undefined || currentTimeUs <= previousTimeUs) return fallback
+  // A long device/network pause must not be reproduced as a multi-second MSE
+  // timeline gap after the newest live frame has already arrived.
+  return Math.max(1, Math.min(250, Math.round((currentTimeUs - previousTimeUs) / 1000)))
+}
+
 export async function createScreenDecoder(
   mode: ScreenDecoderMode,
   target: HTMLCanvasElement | HTMLVideoElement,
@@ -74,6 +82,7 @@ class MseScreenDecoder implements ScreenDecoder {
   private disposed = false
   private videoFrameHandle?: number
   private mseReady = false
+  private lastPresentationTimeUs?: number
   private readonly readyPromise: Promise<void>
   private resolveReady!: () => void
 
@@ -92,7 +101,9 @@ class MseScreenDecoder implements ScreenDecoder {
       videoCodec: 'H264',
       fps,
       flushingTime: 0,
-      maxDelay: 120,
+      // JMuxer catches up by seeking when this threshold is exceeded. A 120ms
+      // threshold caused frequent visible jumps on normal wireless jitter.
+      maxDelay: 500,
       clearBuffer: true,
       onReady: () => {
         this.mseReady = true
@@ -110,7 +121,7 @@ class MseScreenDecoder implements ScreenDecoder {
     await this.waitUntilReady()
   }
 
-  async decode(data: Uint8Array, keyframe: boolean) {
+  async decode(data: Uint8Array, keyframe: boolean, presentationTimeUs?: number) {
     await this.waitUntilReady()
     let packet = data
     if (keyframe && this.codecConfig) {
@@ -121,9 +132,10 @@ class MseScreenDecoder implements ScreenDecoder {
     }
     this.muxer.feed({
       video: packet,
-      duration: Math.max(1, Math.round(1000 / this.fps)),
+      duration: screenFrameDurationMs(this.lastPresentationTimeUs, presentationTimeUs, this.fps),
       isLastVideoFrameComplete: true,
     } as JMuxer.Feeder & { isLastVideoFrameComplete: boolean })
+    if (presentationTimeUs !== undefined) this.lastPresentationTimeUs = presentationTimeUs
     void this.video.play().catch(() => undefined)
   }
 
@@ -137,6 +149,7 @@ class MseScreenDecoder implements ScreenDecoder {
     this.video.removeAttribute('src')
     this.video.load()
     this.codecConfig = undefined
+    this.lastPresentationTimeUs = undefined
   }
 
   private async waitUntilReady() {
@@ -170,6 +183,7 @@ class WebCodecsScreenDecoder implements ScreenDecoder {
   readonly mode = 'webcodecs' as const
   private decoder: VideoDecoder
   private codecConfig?: Uint8Array
+  private firstPresentationTimeUs?: number
 
   constructor(private readonly canvas: HTMLCanvasElement, callbacks: ScreenDecoderCallbacks) {
     this.decoder = new VideoDecoder({
@@ -189,16 +203,20 @@ class WebCodecsScreenDecoder implements ScreenDecoder {
     this.decoder.configure({ codec: codecName(data), optimizeForLatency: true })
   }
 
-  async decode(data: Uint8Array, keyframe: boolean) {
+  async decode(data: Uint8Array, keyframe: boolean, presentationTimeUs?: number) {
     let packet = data
     if (keyframe && this.codecConfig) {
       packet = new Uint8Array(this.codecConfig.length + data.length)
       packet.set(this.codecConfig)
       packet.set(data, this.codecConfig.length)
     }
+    if (presentationTimeUs !== undefined && this.firstPresentationTimeUs === undefined) this.firstPresentationTimeUs = presentationTimeUs
+    const timestamp = presentationTimeUs === undefined
+      ? performance.now() * 1000
+      : presentationTimeUs - (this.firstPresentationTimeUs ?? presentationTimeUs)
     this.decoder.decode(new EncodedVideoChunk({
       type: keyframe ? 'key' : 'delta',
-      timestamp: performance.now() * 1000,
+      timestamp,
       data: packet,
     }))
   }
@@ -206,6 +224,7 @@ class WebCodecsScreenDecoder implements ScreenDecoder {
   dispose() {
     if (this.decoder.state !== 'closed') this.decoder.close()
     this.codecConfig = undefined
+    this.firstPresentationTimeUs = undefined
   }
 }
 
@@ -232,7 +251,7 @@ class SoftwareScreenDecoder implements ScreenDecoder {
     await this.writer.write({ type: 'configuration', data })
   }
 
-  async decode(data: Uint8Array, keyframe: boolean) {
+  async decode(data: Uint8Array, keyframe: boolean, _presentationTimeUs?: number) {
     await this.writer.write({ type: 'data', keyframe, data })
   }
 

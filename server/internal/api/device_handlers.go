@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -119,6 +120,7 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	}
 	defer connection.Close()
 	frameRate := screenFrameRate(request.URL.Query().Get("fps"), 30)
+	streamProtocol := screenStreamProtocol(request.URL.Query().Get("protocol"))
 	controlContext, cancelControlProbe := context.WithTimeout(request.Context(), 3*time.Second)
 	controlTransport, controlErr := s.devices.ScreenControlTransport(controlContext, request.PathValue("id"))
 	cancelControlProbe()
@@ -134,8 +136,8 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	}
 	defer session.Close()
 	width, height := session.Size()
-	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "controlTransport", controlTransport, "width", width, "height", height, "fps", frameRate)
-	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height, "controlTransport": controlTransport}); err != nil {
+	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "controlTransport", controlTransport, "streamProtocol", streamProtocol, "width", width, "height", height, "fps", frameRate)
+	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height, "controlTransport": controlTransport, "streamProtocol": streamProtocol}); err != nil {
 		return
 	}
 	go func() {
@@ -165,7 +167,7 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 	configPackets := 0
 	keyFrames := 0
 	for {
-		packet, config, keyFrame, err := session.ReadPacket()
+		packet, err := session.ReadPacket()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 				s.logger.Info("screen_stream_closed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "videoPackets", videoPackets, "configPackets", configPackets, "keyFrames", keyFrames)
@@ -174,31 +176,52 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 			}
 			return
 		}
-		if packet == nil {
+		if packet.Data == nil {
 			continue
 		}
 		messageType := byte(0)
-		if config {
+		if packet.Config {
 			messageType = 1
 			configPackets++
 			if configPackets == 1 {
-				s.logger.Info("screen_codec_config_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet))
+				s.logger.Info("screen_codec_config_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet.Data))
 			}
-		} else if keyFrame {
+		} else if packet.KeyFrame {
 			messageType = 2
 			keyFrames++
 			videoPackets++
 			if keyFrames == 1 {
-				s.logger.Info("screen_first_keyframe_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet))
+				s.logger.Info("screen_first_keyframe_forwarded", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "bytes", len(packet.Data))
 			}
 		} else {
 			videoPackets++
 		}
-		if err := connection.WriteMessage(websocket.BinaryMessage, append([]byte{messageType}, packet...)); err != nil {
+		if err := connection.WriteMessage(websocket.BinaryMessage, encodeScreenPacket(streamProtocol, messageType, packet.PresentationTimeUS, packet.Data)); err != nil {
 			s.logger.Info("screen_websocket_closed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 			return
 		}
 	}
+}
+
+func screenStreamProtocol(requested string) int {
+	if requested == "2" {
+		return 2
+	}
+	return 1
+}
+
+func encodeScreenPacket(protocol int, kind byte, presentationTimeUS uint64, payload []byte) []byte {
+	headerSize := 1
+	if protocol >= 2 {
+		headerSize = 9
+	}
+	message := make([]byte, headerSize+len(payload))
+	message[0] = kind
+	if protocol >= 2 {
+		binary.BigEndian.PutUint64(message[1:9], presentationTimeUS)
+	}
+	copy(message[headerSize:], payload)
+	return message
 }
 
 func screenFrameRate(requested string, configured int) int {

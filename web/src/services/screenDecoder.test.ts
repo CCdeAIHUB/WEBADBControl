@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { screenDecoderFallback, screenDecoderPreference, screenDecoderStatusText } from './screenDecoder'
+import { screenDecoderFallback, screenDecoderPreference, screenDecoderStatusText, screenFrameDurationMs } from './screenDecoder'
 
 describe('screen decoder selection', () => {
   it('uses WebCodecs when the API is available', () => {
@@ -25,5 +25,12 @@ describe('screen decoder selection', () => {
     expect(screenDecoderFallback('mse')).toBe('software')
     expect(screenDecoderFallback('webcodecs')).toBe('software')
     expect(screenDecoderFallback('software')).toBeUndefined()
+  })
+
+  it('uses scrcpy PTS deltas instead of the selected maximum FPS', () => {
+    // 场景：设备实际以约 18 FPS 输出时，55ms 的真实间隔不能被压缩成 30 FPS 的 33ms，否则 MSE 会反复耗尽缓冲。
+    expect(screenFrameDurationMs(1_000_000, 1_055_000, 30)).toBe(55)
+    expect(screenFrameDurationMs(undefined, 1_055_000, 30)).toBe(33)
+    expect(screenFrameDurationMs(1_000_000, 5_000_000, 30)).toBe(250)
   })
 })

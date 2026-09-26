@@ -49,6 +49,13 @@ type scrcpyStartResult struct {
 	ProcessID uint32 `json:"processId"`
 }
 
+type ScrcpyVideoPacket struct {
+	Data               []byte
+	PresentationTimeUS uint64
+	Config             bool
+	KeyFrame           bool
+}
+
 func (s *Service) StartScrcpy(ctx context.Context, deviceID string, options ScrcpyOptions) (*ScrcpySession, error) {
 	options = normalizeScrcpyOptions(options)
 	apkPath, err := s.companionAPKPath(ctx, deviceID)
@@ -257,26 +264,31 @@ func EncodeScrcpyTouch(action int, pointerID uint32, x, y, width, height int) ([
 	return message, nil
 }
 
-func (s *ScrcpySession) ReadPacket() ([]byte, bool, bool, error) {
+func (s *ScrcpySession) ReadPacket() (ScrcpyVideoPacket, error) {
 	metadata := make([]byte, 12)
 	if err := readExactly(s.video, metadata); err != nil {
-		return nil, false, false, err
+		return ScrcpyVideoPacket{}, err
 	}
 	flags := binary.BigEndian.Uint64(metadata[:8])
 	if flags&(1<<63) != 0 {
 		s.width = int(binary.BigEndian.Uint32(metadata[4:8]))
 		s.height = int(binary.BigEndian.Uint32(metadata[8:12]))
-		return nil, false, false, nil
+		return ScrcpyVideoPacket{}, nil
 	}
 	size := int(binary.BigEndian.Uint32(metadata[8:12]))
 	if size < 1 || size > maxScrcpyPacketSize {
-		return nil, false, false, apperror.New("SCRCPY_PACKET_INVALID", "投屏视频包大小无效", "device.screen", true)
+		return ScrcpyVideoPacket{}, apperror.New("SCRCPY_PACKET_INVALID", "投屏视频包大小无效", "device.screen", true)
 	}
 	packet := make([]byte, size)
 	if err := readExactly(s.video, packet); err != nil {
-		return nil, false, false, err
+		return ScrcpyVideoPacket{}, err
 	}
-	return packet, flags&(1<<62) != 0, flags&(1<<61) != 0, nil
+	config := flags&(1<<62) != 0
+	pts := flags & ((uint64(1) << 61) - 1)
+	if config {
+		pts = 0
+	}
+	return ScrcpyVideoPacket{Data: packet, PresentationTimeUS: pts, Config: config, KeyFrame: flags&(1<<61) != 0}, nil
 }
 
 func readExactly(reader io.Reader, buffer []byte) error {

@@ -2,6 +2,7 @@ package device
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 )
 
@@ -44,5 +45,26 @@ func TestRandomScrcpyIDAlwaysFitsJavaSignedInteger(t *testing.T) {
 		if value < 0x10000000 || value > 0x7fffffff {
 			t.Fatalf("scrcpy id is outside Java signed integer range: %08x", value)
 		}
+	}
+}
+
+func TestReadScrcpyPacketPreservesPresentationTimestamp(t *testing.T) {
+	// 场景：设备编码帧的真实 PTS 必须传给浏览器，不能按请求 FPS 伪造时间轴导致周期性缓冲停顿。
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		metadata := make([]byte, 12)
+		binary.BigEndian.PutUint64(metadata[:8], uint64(1<<61)|1_234_567)
+		binary.BigEndian.PutUint32(metadata[8:], 3)
+		_, _ = server.Write(append(metadata, 0x01, 0x02, 0x03))
+	}()
+
+	packet, err := (&ScrcpySession{video: client}).ReadPacket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packet.PresentationTimeUS != 1_234_567 || !packet.KeyFrame || packet.Config || len(packet.Data) != 3 {
+		t.Fatalf("unexpected packet: %#v", packet)
 	}
 }

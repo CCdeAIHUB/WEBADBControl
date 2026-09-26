@@ -5,6 +5,7 @@ import { api, toAppError } from '@/services/api'
 import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { screenGestureAction, type ScreenGestureStart, type ScreenPoint } from '@/services/screenControl'
+import { parseScreenPacket } from '@/services/screenPacket'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
@@ -22,6 +23,7 @@ const requestedFPS = ref('30')
 const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
 const controlTransport = ref<'scrcpy-control' | 'companion-accessibility'>('scrcpy-control')
+const streamProtocol = ref(1)
 const isFullscreen = ref(false)
 const companionPrompt = ref(false)
 const companionInstalling = ref(false)
@@ -55,7 +57,7 @@ function start() {
   const seq = connectionSeq + 1
   connectionSeq = seq
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}`)
+  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}&protocol=2`)
   socket = current
   current.binaryType = 'arraybuffer'
   decoderPacketQueue = Promise.resolve()
@@ -86,7 +88,7 @@ function start() {
 async function handleStreamMessage(event: MessageEvent, seq: number) {
     if (seq !== connectionSeq) return
     if (typeof event.data === 'string') {
-      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string; controlTransport?: string }
+      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string; controlTransport?: string; streamProtocol?: number }
       if (meta.type === 'error') {
         streamError.value = meta.message || '实时投屏启动失败'
         status.value = 'error'
@@ -96,6 +98,7 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
       streamSize.value = { width: meta.width, height: meta.height }
       controlTransport.value = meta.controlTransport === 'companion-accessibility' ? 'companion-accessibility' : 'scrcpy-control'
+      streamProtocol.value = meta.streamProtocol === 2 ? 2 : 1
       decoder?.dispose()
       decoder = undefined
       await nextTick()
@@ -106,7 +109,8 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       return
     }
     if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
-    const bytes = new Uint8Array(event.data); const kind = bytes[0]; const data = bytes.slice(1)
+    const packet = parseScreenPacket(new Uint8Array(event.data), streamProtocol.value)
+    const { kind, data, presentationTimeUs } = packet
     if (kind === 1) {
       try {
         await decoder.configure(data)
@@ -130,7 +134,7 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       }
       return
     }
-    await decoder.decode(data, kind === 2)
+    await decoder.decode(data, kind === 2, presentationTimeUs)
 }
 
 async function createCurrentDecoder(seq: number) {

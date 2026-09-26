@@ -28,4 +28,6 @@
 
 Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。投屏握手会用 Android 忽略的 `KEYCODE_UNKNOWN` 探测 shell 输入权限，并在 WebSocket `meta.controlTransport` 中返回 `scrcpy-control` 或 `companion-accessibility`；后者会把浏览器的一次指针操作聚合为点击或滑动，经现有伴侣版本、安装和无障碍检查后执行。
 
+视频 WebSocket 保留原有 v1 的 `kind + H.264` 包格式。新页面通过 `protocol=2` 协商 `kind + uint64 PTS(微秒，大端) + H.264`，并以 `meta.streamProtocol=2` 确认；MSE 和 WebCodecs 使用 scrcpy 的真实显示时间戳，而不是用帧率下拉框伪造固定帧间隔。服务端继续兼容未携带协议参数的旧标签页，异常或过长的时间戳间隔会回退或限制为实时播放安全范围。
+
 浏览器在可用时优先使用 WebCodecs；普通局域网 HTTP 优先使用不要求安全上下文的 Media Source Extensions（MSE）硬件播放，并通过仅限 `media-src` 的 CSP `blob:` 授权承载生成的 MP4 媒体流。浏览器不支持 MSE 或 MSE 初始化失败时才回退到随页面静态打包的 TinyH264 软件解码，避免把厂商编码器输出的 Main/High Profile 误交给只支持 Baseline 的软件解码器。入口 HTML 禁止缓存，带哈希资源使用不可变缓存。Web scrcpy 会话仍请求 AVC Baseline Level 4 以提高各路径兼容性。服务端日志记录会话尺寸、首个配置包、首个关键帧和结束时的包计数；浏览器解码异常及 8 秒首帧超时进入系统日志。当前 Web 暂未开放 Windows 客户端的码率、分辨率和 Companion QUIC 视频源选择。
