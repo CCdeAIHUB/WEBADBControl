@@ -60,8 +60,32 @@ impl std::fmt::Display for AppError {
             formatter,
             "{} [{}]: {}",
             self.module, self.error_code, self.message
-        )
+        )?;
+        if let Some(cause) = &self.cause {
+            write!(formatter, " Cause: {cause}")?;
+        }
+        if let Some(suggestion) = &self.suggestion {
+            write!(formatter, " Suggestion: {suggestion}")?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for AppError {}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn display_includes_diagnostic_context_for_server_logs() {
+        let error = AppError::new("BIND_FAILED", "Listener failed.", "remote.quic", true)
+            .with_cause("Address family not supported")
+            .with_suggestion("Choose an IPv4 listen address.");
+
+        assert_eq!(
+            error.to_string(),
+            "remote.quic [BIND_FAILED]: Listener failed. Cause: Address family not supported Suggestion: Choose an IPv4 listen address."
+        );
+    }
+}

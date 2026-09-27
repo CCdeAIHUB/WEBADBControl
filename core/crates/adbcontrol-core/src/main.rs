@@ -113,7 +113,7 @@ fn start_remote_control_if_configured(
     accounts: Arc<RemoteAccountManager>,
     data_dir: std::path::PathBuf,
 ) -> Result<(), adbcontrol_core::AppError> {
-    use std::{env, net::SocketAddr, thread};
+    use std::{env, net::SocketAddr};
 
     use adbcontrol_core::{
         companion::CoreQuicIdentity, QuinnRemoteControlServer, RemoteControlService,
@@ -139,37 +139,11 @@ fn start_remote_control_if_configured(
         vec![String::from("localhost"), listen_addr.ip().to_string()],
     )?;
     let fingerprint = identity.certificate_fingerprint_sha256.clone();
-    let server = QuinnRemoteControlServer::bind(
+    let actual_addr = QuinnRemoteControlServer::spawn(
         listen_addr,
         identity.server_config()?,
         RemoteControlService::new(core, accounts),
     )?;
-    let actual_addr = server.local_addr()?;
-
-    thread::Builder::new()
-        .name(String::from("adbcontrol-remote-quic"))
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build();
-            match runtime {
-                Ok(runtime) => {
-                    if let Err(error) = runtime.block_on(server.run()) {
-                        eprintln!("{error}");
-                    }
-                }
-                Err(error) => eprintln!("Failed to start remote QUIC runtime: {error}"),
-            }
-        })
-        .map_err(|error| {
-            adbcontrol_core::AppError::new(
-                "REMOTE_QUIC_THREAD_START_FAILED",
-                "Failed to start the remote-control QUIC thread.",
-                "remote.startup",
-                true,
-            )
-            .with_cause(error)
-        })?;
 
     eprintln!(
         "Encrypted remote control listening on {actual_addr}; certificate SHA-256: {fingerprint}"

@@ -13,6 +13,82 @@ pub struct QuinnRemoteControlServer<H: CoreRequestHandler + 'static> {
 }
 
 impl<H: CoreRequestHandler + 'static> QuinnRemoteControlServer<H> {
+    /// Start the QUIC endpoint on a dedicated Tokio runtime.
+    ///
+    /// Core startup itself is synchronous. Quinn's convenience `server`
+    /// constructor requires an ambient async runtime, so binding before the
+    /// runtime thread exists fails with `no async runtime found`. This method
+    /// owns both operations and reports the real startup result synchronously.
+    pub fn spawn(
+        listen_addr: SocketAddr,
+        server_config: quinn::ServerConfig,
+        service: RemoteControlService<H>,
+    ) -> Result<SocketAddr, AppError> {
+        let (startup_sender, startup_receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name(String::from("adbcontrol-remote-quic"))
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        let _ = startup_sender.send(Err(AppError::new(
+                            "REMOTE_QUIC_RUNTIME_START_FAILED",
+                            "Failed to start the remote-control QUIC runtime.",
+                            "remote.quic",
+                            true,
+                        )
+                        .with_cause(error)));
+                        return;
+                    }
+                };
+
+                runtime.block_on(async move {
+                    let server = match Self::bind(listen_addr, server_config, service) {
+                        Ok(server) => server,
+                        Err(error) => {
+                            let _ = startup_sender.send(Err(error));
+                            return;
+                        }
+                    };
+                    let actual_addr = match server.local_addr() {
+                        Ok(address) => address,
+                        Err(error) => {
+                            let _ = startup_sender.send(Err(error));
+                            return;
+                        }
+                    };
+                    if startup_sender.send(Ok(actual_addr)).is_err() {
+                        return;
+                    }
+                    if let Err(error) = server.run().await {
+                        eprintln!("{error}");
+                    }
+                });
+            })
+            .map_err(|error| {
+                AppError::new(
+                    "REMOTE_QUIC_THREAD_START_FAILED",
+                    "Failed to start the remote-control QUIC thread.",
+                    "remote.quic",
+                    true,
+                )
+                .with_cause(error)
+            })?;
+
+        startup_receiver.recv().map_err(|error| {
+            AppError::new(
+                "REMOTE_QUIC_STARTUP_CHANNEL_CLOSED",
+                "Remote-control QUIC startup ended before reporting its status.",
+                "remote.quic",
+                true,
+            )
+            .with_cause(error)
+        })?
+    }
+
     pub fn bind(
         listen_addr: SocketAddr,
         server_config: quinn::ServerConfig,
@@ -192,6 +268,28 @@ mod tests {
         connection.close(0u32.into(), b"test complete");
         endpoint.close(0u32.into(), b"test complete");
         server_task.abort();
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn remote_server_can_start_without_an_ambient_async_runtime() {
+        let identity = CoreQuicIdentity::generate_self_signed(vec![String::from("localhost")])
+            .expect("identity should be generated");
+        let path = std::env::temp_dir().join(format!(
+            "adbcontrol-remote-quic-sync-start-test-{}.json",
+            rand::random::<u64>()
+        ));
+        let accounts = Arc::new(RemoteAccountManager::load_or_initialize(&path).unwrap());
+        let service = RemoteControlService::new(Arc::new(FakeCore), accounts);
+
+        let address = QuinnRemoteControlServer::spawn(
+            "127.0.0.1:0".parse().unwrap(),
+            identity.server_config().unwrap(),
+            service,
+        )
+        .expect("server startup should create and enter its own async runtime");
+
+        assert_ne!(address.port(), 0);
         std::fs::remove_file(path).ok();
     }
 }
