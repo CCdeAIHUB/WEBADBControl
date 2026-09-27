@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("POST /api/v1/devices/{id}/actions", s.deviceAction)
 	router.HandleFunc("GET /api/v1/devices/{id}/screenshot", s.screenshot)
 	router.HandleFunc("GET /api/v1/devices/{id}/screen", s.screenSocket)
+	router.HandleFunc("GET /api/v1/remote/devices/{id}/screen", s.remoteScreenSocket)
 	router.HandleFunc("POST /api/v1/devices/{id}/terminal", s.terminal)
 	router.HandleFunc("GET /api/v1/devices/{id}/packages", s.packages)
 	router.HandleFunc("POST /api/v1/devices/{id}/packages/action", s.packageAction)
@@ -108,6 +109,20 @@ func (s *Server) authentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/api/v1/health" || request.URL.Path == "/api/v1/session" || !strings.HasPrefix(request.URL.Path, "/api/") {
 			next.ServeHTTP(writer, request)
+			return
+		}
+		if strings.HasPrefix(request.URL.Path, "/api/v1/remote/") {
+			token := strings.TrimSpace(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+			if token == "" || s.devices == nil {
+				writeError(writer, http.StatusUnauthorized, errUnauthorized())
+				return
+			}
+			var remote remoteSession
+			if err := s.devices.Core().Call(request.Context(), "remote.internal.session.inspect", map[string]string{"remoteSessionToken": token}, &remote); err != nil || remote.PasswordChangeRequired {
+				writeError(writer, http.StatusUnauthorized, errUnauthorized())
+				return
+			}
+			next.ServeHTTP(writer, withRemoteSession(request, remote))
 			return
 		}
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")

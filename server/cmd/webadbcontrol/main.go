@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,13 +33,22 @@ func main() {
 	}
 	processContext, cancelProcess := context.WithCancel(context.Background())
 	defer cancelProcess()
-	transport, err := coreipc.StartProcessWithEnv(
+	logRepository, err := observability.OpenRepository(filepath.Join(applicationConfig.DataDir, "observability.sqlite"))
+	if err != nil {
+		logger.Error("observability_repository_failed", "error", err)
+		os.Exit(1)
+	}
+	defer logRepository.Close()
+	logService := observability.NewService(logRepository)
+	coreDiagnosticWriter := observability.NewCoreDiagnosticWriter(logService, logger)
+	transport, err := coreipc.StartProcessWithEnvAndStderr(
 		processContext,
 		applicationConfig.CoreBinary,
 		map[string]string{
 			"ADBCONTROL_REMOTE_DATA_DIR": applicationConfig.CoreRemoteDataDir,
 			"ADBCONTROL_REMOTE_LISTEN":   applicationConfig.CoreRemoteListen,
 		},
+		io.MultiWriter(os.Stderr, coreDiagnosticWriter),
 	)
 	if err != nil {
 		logger.Error("core_start_failed", "error", err)
@@ -64,13 +74,6 @@ func main() {
 	}
 	automationService := automation.NewService(repository, adbRuntime.NewExecutor(devices))
 	automationService.SetLogger(logger)
-	logRepository, err := observability.OpenRepository(filepath.Join(applicationConfig.DataDir, "observability.sqlite"))
-	if err != nil {
-		logger.Error("observability_repository_failed", "error", err)
-		os.Exit(1)
-	}
-	defer logRepository.Close()
-	logService := observability.NewService(logRepository)
 	if err := logService.Record(context.Background(), observability.Event{
 		Type:    observability.TypeSystem,
 		Level:   observability.LevelInfo,

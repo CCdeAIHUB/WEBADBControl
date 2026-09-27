@@ -164,6 +164,7 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
                 Err(error) => RemoteResponse::failure(Some(request.id), error),
             },
             "auth.changePassword" => self.change_password(request, &session),
+            "diagnostics.report" => self.report_diagnostics(request, &session),
             "admin.users.list" => self.admin_list_users(request, &session),
             "admin.users.create" => self.admin_create_user(request, &session),
             "admin.users.delete" => self.admin_delete_user(request, &session),
@@ -171,6 +172,97 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
             "admin.devices.assign" => self.admin_assign_device(request, &session),
             _ => self.forward_core_request(request, &session),
         }
+    }
+
+    fn report_diagnostics(
+        &self,
+        request: RemoteRequest,
+        session: &AuthenticatedSession,
+    ) -> RemoteResponse {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ClientEvent {
+            #[serde(default)]
+            level: String,
+            #[serde(default)]
+            phase: String,
+            #[serde(default)]
+            module: String,
+            #[serde(default)]
+            ok: bool,
+            #[serde(default)]
+            elapsed_ms: u64,
+            #[serde(default)]
+            error_code: String,
+            #[serde(default)]
+            detail: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params {
+            #[serde(default)]
+            session_id: String,
+            events: Vec<ClientEvent>,
+        }
+        let params: Params = match parse_params(request.params) {
+            Ok(params) => params,
+            Err(error) => return RemoteResponse::failure(Some(request.id), error),
+        };
+        if params.events.is_empty() || params.events.len() > 50 {
+            return RemoteResponse::failure(
+                Some(request.id),
+                AppError::new(
+                    "REMOTE_DIAGNOSTIC_BATCH_INVALID",
+                    "Diagnostic batches must contain between 1 and 50 events.",
+                    "remote.diagnostics",
+                    true,
+                ),
+            );
+        }
+        fn safe(value: &str, max: usize) -> String {
+            let value = value.trim();
+            if value.is_empty()
+                || value.len() > max
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.:+-/=@ ".contains(&byte))
+            {
+                return "unknown".into();
+            }
+            value.to_owned()
+        }
+        let session_id = safe(&params.session_id, 64);
+        for event in &params.events {
+            let phase = safe(&event.phase, 96);
+            let module = safe(&event.module, 96);
+            let code = safe(&event.error_code, 96);
+            let detail = safe(&event.detail, 200);
+            let trace = format!("mobile-{session_id}");
+            crate::diagnostics::record(
+                "mobile.client",
+                &phase,
+                &trace,
+                event.ok,
+                event.elapsed_ms as u128,
+                (!event.ok).then_some(code.as_str()),
+            );
+            eprintln!(
+                "{}",
+                json!({
+                    "event": "mobile_client_diagnostic",
+                    "actor": session.username,
+                    "sessionId": session_id,
+                    "level": safe(&event.level, 16),
+                    "phase": phase,
+                    "module": module,
+                    "ok": event.ok,
+                    "elapsedMs": event.elapsed_ms,
+                    "errorCode": if event.ok { "" } else { &code },
+                    "detail": detail,
+                })
+            );
+        }
+        RemoteResponse::success(request.id, json!({"accepted": params.events.len()}))
     }
 
     fn login(&self, request: RemoteRequest) -> RemoteResponse {
@@ -652,6 +744,46 @@ mod tests {
         assert_eq!(
             denied.error.unwrap().error_code,
             "REMOTE_AUTH_ADMIN_LOCAL_ONLY"
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn authenticated_mobile_client_can_report_bounded_diagnostics() {
+        let (service, accounts, path) = setup();
+        accounts
+            .create_user("operator", "operator-password")
+            .unwrap();
+        let operator = login(&service, "operator", "operator-password");
+        let accepted = service.handle_request(request(
+            "diagnostics",
+            Some(&operator),
+            "diagnostics.report",
+            json!({
+                "sessionId": "mobile-test",
+                "events": [{
+                    "level": "error",
+                    "phase": "quic.request",
+                    "module": "remote.transport",
+                    "ok": false,
+                    "elapsedMs": 1200,
+                    "errorCode": "REMOTE_QUIC_REQUEST_FAILED",
+                    "detail": "timeout"
+                }]
+            }),
+        ));
+        assert!(accepted.ok);
+        assert_eq!(accepted.result.unwrap()["accepted"], 1);
+
+        let rejected = service.handle_request(request(
+            "empty-diagnostics",
+            Some(&operator),
+            "diagnostics.report",
+            json!({"sessionId": "mobile-test", "events": []}),
+        ));
+        assert_eq!(
+            rejected.error.unwrap().error_code,
+            "REMOTE_DIAGNOSTIC_BATCH_INVALID"
         );
         std::fs::remove_file(path).ok();
     }

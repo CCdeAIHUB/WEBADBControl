@@ -259,7 +259,9 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
     }
 
     pub fn handle_request(&self, request: IpcRequest) -> IpcResponse {
-        if request.method.starts_with("remote.admin.") {
+        if request.method.starts_with("remote.admin.")
+            || request.method.starts_with("remote.internal.")
+        {
             return match &self.local_admin {
                 Some(local_admin) => local_admin.handle_request(request),
                 None => IpcResponse::failure(

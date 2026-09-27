@@ -113,6 +113,19 @@ var screenUpgrader = websocket.Upgrader{
 }
 
 func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request) {
+	s.serveScreenSocket(writer, request)
+}
+
+func (s *Server) remoteScreenSocket(writer http.ResponseWriter, request *http.Request) {
+	session, ok := remoteSessionFromContext(request.Context())
+	if !ok || !session.canAccessDevice(request.PathValue("id")) {
+		writeError(writer, http.StatusForbidden, errForbidden())
+		return
+	}
+	s.serveScreenSocket(writer, request)
+}
+
+func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Request) {
 	connection, err := screenUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
 		s.logger.Warn("screen_websocket_upgrade_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)

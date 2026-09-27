@@ -23,6 +23,9 @@ impl LocalAdminService {
     }
 
     pub fn handle_request(&self, request: IpcRequest) -> IpcResponse {
+        if request.method == "remote.internal.session.inspect" {
+            return self.inspect_remote_session(request);
+        }
         if request.method == "remote.admin.login" {
             return self.login(request);
         }
@@ -76,6 +79,41 @@ impl LocalAdminService {
                     false,
                 ),
             ),
+        }
+    }
+
+    /// Trusted host-process boundary used by the mobile media gateway. This is
+    /// never reachable from remote QUIC and deliberately returns no token.
+    fn inspect_remote_session(&self, request: IpcRequest) -> IpcResponse {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params {
+            remote_session_token: String,
+        }
+        let params: Params = match parse_params(request.params) {
+            Ok(params) => params,
+            Err(error) => return IpcResponse::failure(Some(request.id), error),
+        };
+        match self.accounts.authenticate(&params.remote_session_token) {
+            Ok(session) if session.role == RemoteRole::User => IpcResponse::success(
+                request.id,
+                json!({
+                    "username": session.username,
+                    "role": session.role,
+                    "devices": session.devices,
+                    "passwordChangeRequired": session.password_change_required,
+                }),
+            ),
+            Ok(_) => IpcResponse::failure(
+                Some(request.id),
+                AppError::new(
+                    "REMOTE_AUTH_ADMIN_LOCAL_ONLY",
+                    "The built-in administrator cannot use the remote media gateway.",
+                    "remote.auth",
+                    false,
+                ),
+            ),
+            Err(error) => IpcResponse::failure(Some(request.id), error),
         }
     }
 

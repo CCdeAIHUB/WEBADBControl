@@ -8,6 +8,33 @@ import (
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/auth"
 )
 
+type remoteSession struct {
+	Username               string   `json:"username"`
+	Role                   string   `json:"role"`
+	Devices                []string `json:"devices"`
+	PasswordChangeRequired bool     `json:"passwordChangeRequired"`
+}
+
+type remoteSessionContextKey struct{}
+
+func withRemoteSession(request *http.Request, session remoteSession) *http.Request {
+	return request.WithContext(context.WithValue(request.Context(), remoteSessionContextKey{}, session))
+}
+
+func remoteSessionFromContext(ctx context.Context) (remoteSession, bool) {
+	session, ok := ctx.Value(remoteSessionContextKey{}).(remoteSession)
+	return session, ok
+}
+
+func (s remoteSession) canAccessDevice(deviceID string) bool {
+	for _, assigned := range s.Devices {
+		if assigned == deviceID {
+			return true
+		}
+	}
+	return false
+}
+
 func isLocalManagementRequest(listenAddress string, request *http.Request) bool {
 	peerHost, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
