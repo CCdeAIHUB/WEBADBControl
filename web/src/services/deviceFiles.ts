@@ -47,3 +47,9 @@ export function sortFileEntries(entries: DeviceFileEntry[]): DeviceFileEntry[] {
 export function canOpenEntry(entry: DeviceFileEntry): boolean {
   return entry.type === 'directory'
 }
+
+/** 兼容旧服务未填 path 的目录项，同时不信任服务端返回的相对路径。 */
+export function resolveOpenPath(currentPath: string, entry: DeviceFileEntry): string {
+  if (!canOpenEntry(entry)) return normalizeRemotePath(currentPath)
+  return normalizeRemotePath(entry.path || joinRemotePath(currentPath, entry.name))
+}

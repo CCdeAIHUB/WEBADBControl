@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { canOpenEntry, formatFileSize, joinRemotePath, parentRemotePath, pathSegments, sortFileEntries } from './deviceFiles'
+import { canOpenEntry, formatFileSize, joinRemotePath, parentRemotePath, pathSegments, resolveOpenPath, sortFileEntries } from './deviceFiles'
 
 describe('deviceFiles helpers', () => {
+  it('resolves a directory path when an older response omitted entry.path', () => {
+    // 场景：升级期间旧 Core 只返回 name/type，点击文件夹仍能进入。
+    expect(resolveOpenPath('/sdcard', { name: 'Download', path: '', type: 'directory', size: 0, permissions: '' })).toBe('/sdcard/Download')
+  })
   it('keeps remote paths normalized for device file operations', () => {
     // 场景：UI 组合目录和文件名时，必须保持设备绝对路径，不能生成双斜杠或空路径。
     expect(joinRemotePath('/sdcard/', 'Download')).toBe('/sdcard/Download')

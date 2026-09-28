@@ -36,6 +36,14 @@ func TestParseFileListingAcceptsAndroidShortDateVariant(t *testing.T) {
 	}
 }
 
+func TestParseFileListingAcceptsToyboxWithoutLinkCount(t *testing.T) {
+	// 场景：部分 Android toybox 的 ls 输出省略硬链接数，目录仍必须被识别为可进入项。
+	entries := ParseFileListing("/sdcard", "drwxrwx--x root sdcard_rw 4096 2026-09-28 12:34 Download\n")
+	if len(entries) != 1 || entries[0].Type != "directory" || entries[0].Path != "/sdcard/Download" {
+		t.Fatalf("bad compact toybox entry: %#v", entries)
+	}
+}
+
 func TestValidateMutableRemotePathLimitsDangerousLocations(t *testing.T) {
 	// 场景：删除/新建目录只允许共享存储下的具体路径，不能误删设备系统目录或存储根。
 	if err := ValidateMutableRemotePath("/sdcard/Documents"); err != nil {

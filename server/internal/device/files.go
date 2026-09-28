@@ -64,22 +64,27 @@ func ParseFileListing(basePath, output string) []FileEntry {
 
 func parseFileEntry(basePath, line string) (FileEntry, bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 8 || fields[0] == "" {
+	if len(fields) < 7 || fields[0] == "" {
 		return FileEntry{}, false
 	}
-	modifiedStart := 5
-	modifiedEnd := 6
-	nameStart := 6
+	ownerIndex := 1
+	if _, err := strconv.Atoi(fields[1]); err == nil {
+		ownerIndex = 2
+	}
+	sizeIndex := ownerIndex + 2
+	modifiedStart := sizeIndex + 1
+	modifiedEnd := modifiedStart + 1
+	nameStart := modifiedEnd
 	switch {
-	case isISODate(fields[5]) && len(fields) > 6 && looksLikeTimeOrYear(fields[6]):
+	case isISODate(fields[modifiedStart]) && len(fields) > modifiedStart+1 && looksLikeTimeOrYear(fields[modifiedStart+1]):
 		// Android toybox commonly emits: perms links owner group size YYYY-MM-DD HH:MM name.
 		// GNU coreutils commonly emits: perms links owner group size Mon DD HH:MM name.
 		// Keep both forms explicit so names containing spaces remain intact.
-		modifiedEnd = 7
-		nameStart = 7
-	case !isISODate(fields[5]) && len(fields) > 8:
-		modifiedEnd = 8
-		nameStart = 8
+		modifiedEnd = modifiedStart + 2
+		nameStart = modifiedEnd
+	case !isISODate(fields[modifiedStart]) && len(fields) > modifiedStart+3:
+		modifiedEnd = modifiedStart + 3
+		nameStart = modifiedEnd
 	}
 	if len(fields) <= nameStart {
 		return FileEntry{}, false
@@ -99,14 +104,14 @@ func parseFileEntry(basePath, line string) (FileEntry, bool) {
 	case 'l':
 		entryType = "link"
 	}
-	size, _ := strconv.ParseInt(fields[4], 10, 64)
+	size, _ := strconv.ParseInt(fields[sizeIndex], 10, 64)
 	return FileEntry{
 		Name:        name,
 		Path:        pathpkg.Join(basePath, name),
 		Type:        entryType,
 		Permissions: fields[0],
-		Owner:       fields[2],
-		Group:       fields[3],
+		Owner:       fields[ownerIndex],
+		Group:       fields[ownerIndex+1],
 		Size:        size,
 		Modified:    strings.Join(fields[modifiedStart:modifiedEnd], " "),
 		Target:      target,

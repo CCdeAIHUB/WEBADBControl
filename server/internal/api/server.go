@@ -68,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("GET /api/v1/devices/{id}/screenshot", s.screenshot)
 	router.HandleFunc("GET /api/v1/devices/{id}/screen", s.screenSocket)
 	router.HandleFunc("GET /api/v1/remote/devices/{id}/screen", s.remoteScreenSocket)
+	router.HandleFunc("GET /api/v1/remote/devices/{id}/screenshot", s.remoteScreenshot)
 	router.HandleFunc("POST /api/v1/devices/{id}/terminal", s.terminal)
 	router.HandleFunc("GET /api/v1/devices/{id}/packages", s.packages)
 	router.HandleFunc("POST /api/v1/devices/{id}/packages/action", s.packageAction)

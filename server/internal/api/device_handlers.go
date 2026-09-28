@@ -125,6 +125,15 @@ func (s *Server) remoteScreenSocket(writer http.ResponseWriter, request *http.Re
 	s.serveScreenSocket(writer, request)
 }
 
+func (s *Server) remoteScreenshot(writer http.ResponseWriter, request *http.Request) {
+	session, ok := remoteSessionFromContext(request.Context())
+	if !ok || !session.canAccessDevice(request.PathValue("id")) {
+		writeError(writer, http.StatusForbidden, errForbidden())
+		return
+	}
+	s.screenshot(writer, request)
+}
+
 func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Request) {
 	connection, err := screenUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
