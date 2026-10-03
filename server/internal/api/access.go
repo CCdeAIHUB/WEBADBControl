@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/auth"
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
 )
 
 type remoteSession struct {
@@ -28,7 +29,7 @@ func remoteSessionFromContext(ctx context.Context) (remoteSession, bool) {
 
 func (s remoteSession) canAccessDevice(deviceID string) bool {
 	for _, assigned := range s.Devices {
-		if assigned == deviceID {
+		if device.EquivalentDeviceID(assigned, deviceID) {
 			return true
 		}
 	}

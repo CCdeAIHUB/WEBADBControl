@@ -119,18 +119,14 @@ func (s *Server) screenSocket(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) remoteScreenSocket(writer http.ResponseWriter, request *http.Request) {
-	session, ok := remoteSessionFromContext(request.Context())
-	if !ok || !session.canAccessDevice(request.PathValue("id")) {
-		writeError(writer, http.StatusForbidden, errForbidden())
+	if !s.requireRemoteDevice(writer, request) {
 		return
 	}
 	s.serveScreenSocket(writer, request)
 }
 
 func (s *Server) remoteScreenshot(writer http.ResponseWriter, request *http.Request) {
-	session, ok := remoteSessionFromContext(request.Context())
-	if !ok || !session.canAccessDevice(request.PathValue("id")) {
-		writeError(writer, http.StatusForbidden, errForbidden())
+	if !s.requireRemoteDevice(writer, request) {
 		return
 	}
 	s.screenshot(writer, request)
@@ -177,11 +173,42 @@ func (s *Server) remoteStopHardwareMonitor(writer http.ResponseWriter, request *
 
 func (s *Server) requireRemoteDevice(writer http.ResponseWriter, request *http.Request) bool {
 	session, ok := remoteSessionFromContext(request.Context())
-	if !ok || !session.canAccessDevice(request.PathValue("id")) {
+	requested := request.PathValue("id")
+	if !ok || !session.canAccessDevice(requested) {
 		writeError(writer, http.StatusForbidden, errForbidden())
 		return false
 	}
+	resolved, err := s.devices.ResolveOnlineDeviceID(request.Context(), requested)
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err)
+		return false
+	}
+	request.SetPathValue("id", resolved)
 	return true
+}
+
+func (s *Server) remoteCompanionStatus(writer http.ResponseWriter, request *http.Request) {
+	if s.requireRemoteDevice(writer, request) {
+		s.companionStatus(writer, request)
+	}
+}
+
+func (s *Server) remoteCapabilities(writer http.ResponseWriter, request *http.Request) {
+	if s.requireRemoteDevice(writer, request) {
+		s.capabilities(writer, request)
+	}
+}
+
+func (s *Server) remotePermissions(writer http.ResponseWriter, request *http.Request) {
+	if s.requireRemoteDevice(writer, request) {
+		s.permissions(writer, request)
+	}
+}
+
+func (s *Server) remoteInvokeCapability(writer http.ResponseWriter, request *http.Request) {
+	if s.requireRemoteDevice(writer, request) {
+		s.invokeCapability(writer, request)
+	}
 }
 
 func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Request) {

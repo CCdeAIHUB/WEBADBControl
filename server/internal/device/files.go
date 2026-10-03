@@ -24,11 +24,21 @@ func (s *Service) ListFiles(ctx context.Context, deviceID, remotePath string) ([
 	if err := ValidateRemotePath(remotePath); err != nil {
 		return nil, err
 	}
-	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "ls", "-la", remotePath))
+	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", "ls", "-la", DirectoryListingPath(remotePath)))
 	if err != nil {
 		return nil, err
 	}
 	return ParseFileListing(remotePath, output.Stdout), nil
+}
+
+// DirectoryListingPath forces ls to dereference directory symlinks such as
+// Android's /sdcard -> /storage/self/primary instead of listing the link itself.
+func DirectoryListingPath(remotePath string) string {
+	cleaned := pathpkg.Clean(remotePath)
+	if cleaned == "/" {
+		return cleaned
+	}
+	return cleaned + "/"
 }
 
 func (s *Service) MakeDirectory(ctx context.Context, deviceID, remotePath string) error {

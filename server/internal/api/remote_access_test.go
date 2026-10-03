@@ -54,3 +54,15 @@ func TestRemoteSessionChecksAssignedDevice(t *testing.T) {
 		t.Fatal("assigned-device boundary is incorrect")
 	}
 }
+
+func TestRemoteSessionAcceptsOnlyEquivalentMDNSCollisionAlias(t *testing.T) {
+	// 场景：开启 tcpip 导致 ADB 重建连接后，mDNS 的本机冲突序号可能消失；
+	// 远程媒体应继续访问同一服务名，但不能因此越权到其他设备。
+	session := remoteSession{Devices: []string{"adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp"}}
+	if !session.canAccessDevice("adb-R3CR70SJHHR-2VyQ5v._adb-tls-connect._tcp") {
+		t.Fatal("equivalent mDNS alias was rejected")
+	}
+	if session.canAccessDevice("adb-other._adb-tls-connect._tcp") {
+		t.Fatal("unrelated mDNS device was authorized")
+	}
+}

@@ -468,10 +468,11 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
 
     fn forward_core_request(
         &self,
-        request: RemoteRequest,
+        mut request: RemoteRequest,
         session: &AuthenticatedSession,
     ) -> RemoteResponse {
         if session.role != RemoteRole::Admin {
+            self.resolve_request_device_alias(&mut request, session);
             if let Err(error) = authorize_user_core_request(&request, session) {
                 return RemoteResponse::failure(Some(request.id), error);
             }
@@ -489,8 +490,29 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
                     device
                         .get("deviceId")
                         .and_then(Value::as_str)
-                        .is_some_and(|device_id| session.devices.contains(device_id))
+                        .is_some_and(|device_id| session_can_access_device(session, device_id))
                 });
+                for device_id in self.current_adb_device_ids() {
+                    if !session_can_access_device(session, &device_id) {
+                        continue;
+                    }
+                    let already_present = devices.iter().any(|device| {
+                        device
+                            .get("deviceId")
+                            .and_then(Value::as_str)
+                            .is_some_and(|existing| {
+                                same_remote_device_identity(existing, &device_id)
+                            })
+                    });
+                    if !already_present {
+                        devices.push(json!({
+                            "deviceId": device_id,
+                            "name": device_id,
+                            "connectionState": "adb",
+                            "adbState": "device"
+                        }));
+                    }
+                }
             }
         }
         RemoteResponse {
@@ -515,6 +537,61 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
                     .iter()
                     .any(|device| device.get("deviceId").and_then(Value::as_str) == Some(device_id))
             })
+    }
+
+    fn resolve_request_device_alias(
+        &self,
+        request: &mut RemoteRequest,
+        session: &AuthenticatedSession,
+    ) {
+        let requested = match request.method.as_str() {
+            "adb.exec" => request
+                .params
+                .get("args")
+                .and_then(Value::as_array)
+                .and_then(|args| args.get(1))
+                .and_then(Value::as_str),
+            "device.getCapabilities" | "device.getPermissionState" | "device.invoke" => {
+                request.params.get("deviceId").and_then(Value::as_str)
+            }
+            _ => None,
+        };
+        let Some(requested) = requested else { return };
+        if !session_can_access_device(session, requested) {
+            return;
+        }
+        let Some(current) = self
+            .current_adb_device_ids()
+            .into_iter()
+            .find(|candidate| same_remote_device_identity(requested, candidate))
+        else {
+            return;
+        };
+        match request.method.as_str() {
+            "adb.exec" => {
+                if let Some(args) = request.params.get_mut("args").and_then(Value::as_array_mut) {
+                    args[1] = Value::String(current);
+                }
+            }
+            _ => request.params["deviceId"] = Value::String(current),
+        }
+    }
+
+    fn current_adb_device_ids(&self) -> Vec<String> {
+        let response = self.core.handle_core_request(IpcRequest {
+            id: String::from("remote-current-adb-devices"),
+            method: String::from("adb.exec"),
+            params: json!({"args": ["devices", "-l"]}),
+        });
+        let Some(stdout) = response
+            .result
+            .as_ref()
+            .and_then(|value| value.get("stdout"))
+            .and_then(Value::as_str)
+        else {
+            return Vec::new();
+        };
+        stdout.lines().filter_map(parse_adb_device_id).collect()
     }
 }
 
@@ -547,7 +624,7 @@ fn authorize_user_core_request(
             let device_command = args.get(2).and_then(Value::as_str);
             match (device_id, device_command) {
                 (Some(device_id), Some(command))
-                    if session.devices.contains(device_id)
+                    if session_can_access_device(session, device_id)
                         && is_device_scoped_adb_command(command) =>
                 {
                     Ok(())
@@ -564,11 +641,45 @@ fn authorize_device_id(
     session: &AuthenticatedSession,
 ) -> Result<(), AppError> {
     let device_id = device_id.and_then(Value::as_str).unwrap_or_default();
-    if !device_id.is_empty() && session.devices.contains(device_id) {
+    if !device_id.is_empty() && session_can_access_device(session, device_id) {
         Ok(())
     } else {
         Err(permission_denied())
     }
+}
+
+fn session_can_access_device(session: &AuthenticatedSession, device_id: &str) -> bool {
+    session
+        .devices
+        .iter()
+        .any(|assigned| same_remote_device_identity(assigned, device_id))
+}
+
+fn same_remote_device_identity(left: &str, right: &str) -> bool {
+    left == right
+        || normalized_mdns_service_identity(left)
+            .zip(normalized_mdns_service_identity(right))
+            .is_some_and(|(left, right)| left == right)
+}
+
+fn normalized_mdns_service_identity(value: &str) -> Option<&str> {
+    const SUFFIX: &str = "._adb-tls-connect._tcp";
+    let service = value.strip_suffix(SUFFIX)?;
+    if let Some(opening) = service.rfind(" (") {
+        let instance = service.strip_suffix(')')?.get(opening + 2..)?;
+        if !instance.is_empty() && instance.bytes().all(|byte| byte.is_ascii_digit()) {
+            return service.get(..opening);
+        }
+    }
+    (!service.is_empty()).then_some(service)
+}
+
+fn parse_adb_device_id(line: &str) -> Option<String> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let state_index = fields
+        .iter()
+        .position(|field| matches!(*field, "device" | "offline" | "unauthorized"))?;
+    (state_index > 0 && fields[state_index] == "device").then(|| fields[..state_index].join(" "))
 }
 
 fn is_device_scoped_adb_command(command: &str) -> bool {
@@ -670,6 +781,17 @@ mod tests {
                         {"deviceId": "device-1", "name": "One"},
                         {"deviceId": "device-2", "name": "Two"}
                     ]),
+                )
+            } else if request.method == "adb.exec"
+                && request.params["args"].get(0).and_then(Value::as_str) == Some("devices")
+            {
+                IpcResponse::success(
+                    request.id,
+                    json!({
+                        "exitCode": 0,
+                        "stdout": "List of devices attached\ndevice-1 device\ndevice-2 device\n",
+                        "stderr": ""
+                    }),
                 )
             } else {
                 IpcResponse::success(request.id, json!({"forwarded": true}))
@@ -870,5 +992,27 @@ mod tests {
             "REMOTE_AUTH_FORBIDDEN"
         );
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn mdns_collision_suffix_does_not_break_assigned_device_identity() {
+        let assigned = "adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp";
+        let current = "adb-R3CR70SJHHR-2VyQ5v._adb-tls-connect._tcp";
+        assert!(same_remote_device_identity(assigned, current));
+        assert!(!same_remote_device_identity(
+            assigned,
+            "adb-other._adb-tls-connect._tcp"
+        ));
+        assert!(!same_remote_device_identity(assigned, "192.168.3.168:5555"));
+    }
+
+    #[test]
+    fn adb_identity_refresh_excludes_offline_and_unauthorized_rows() {
+        assert_eq!(
+            parse_adb_device_id("device-1 device product:x"),
+            Some(String::from("device-1"))
+        );
+        assert_eq!(parse_adb_device_id("device-1 offline product:x"), None);
+        assert_eq!(parse_adb_device_id("device-1 unauthorized product:x"), None);
     }
 }

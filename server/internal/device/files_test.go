@@ -58,3 +58,14 @@ func TestValidateMutableRemotePathLimitsDangerousLocations(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectoryListingPathDereferencesSharedStorageSymlink(t *testing.T) {
+	// 场景：Android 的 /sdcard 是目录符号链接；`ls -la /sdcard` 只返回链接本身，
+	// 列目录必须追加斜杠，才能返回 Download/DCIM 等可进入目录。
+	if got := DirectoryListingPath("/sdcard"); got != "/sdcard/" {
+		t.Fatalf("listing path = %q", got)
+	}
+	if got := DirectoryListingPath("/sdcard/Download/"); got != "/sdcard/Download/" {
+		t.Fatalf("nested listing path = %q", got)
+	}
+}

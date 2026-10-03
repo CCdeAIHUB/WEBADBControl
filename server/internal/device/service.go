@@ -315,6 +315,33 @@ func normalizedMDNSServiceIdentity(deviceID string) string {
 	return serviceName
 }
 
+// EquivalentDeviceID reports whether two ADB serials identify the same wireless
+// debugging mDNS service. ADB may append a local " (n)" collision suffix after
+// reconnecting; that suffix must not invalidate a remote account assignment.
+func EquivalentDeviceID(left, right string) bool {
+	if left == right {
+		return true
+	}
+	leftService := normalizedMDNSServiceIdentity(left)
+	return leftService != "" && leftService == normalizedMDNSServiceIdentity(right)
+}
+
+// ResolveOnlineDeviceID maps a persisted/assigned serial to the serial currently
+// reported by ADB. This prevents stale mDNS collision suffixes from reaching adb -s.
+func (s *Service) ResolveOnlineDeviceID(ctx context.Context, requested string) (string, error) {
+	output, err := s.Exec(ctx, []string{"devices", "-l"})
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range parseDevices(output.Stdout) {
+		if candidate.State == "device" && EquivalentDeviceID(requested, candidate.ID) {
+			return candidate.ID, nil
+		}
+	}
+	return "", apperror.New("REMOTE_DEVICE_NOT_ONLINE", "已分配设备当前未通过 ADB 在线", "remote.device", true).
+		WithSuggestion("请开启设备无线调试并等待自动重连")
+}
+
 func isOnlineEndpoint(candidate Device, endpoint string) bool {
 	if candidate.State != "device" {
 		return false
