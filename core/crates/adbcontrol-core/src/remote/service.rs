@@ -486,33 +486,7 @@ impl<H: CoreRequestHandler> RemoteControlService<H> {
         });
         if is_device_list && session.role != RemoteRole::Admin && response.ok {
             if let Some(Value::Array(devices)) = response.result.as_mut() {
-                devices.retain(|device| {
-                    device
-                        .get("deviceId")
-                        .and_then(Value::as_str)
-                        .is_some_and(|device_id| session_can_access_device(session, device_id))
-                });
-                for device_id in self.current_adb_device_ids() {
-                    if !session_can_access_device(session, &device_id) {
-                        continue;
-                    }
-                    let already_present = devices.iter().any(|device| {
-                        device
-                            .get("deviceId")
-                            .and_then(Value::as_str)
-                            .is_some_and(|existing| {
-                                same_remote_device_identity(existing, &device_id)
-                            })
-                    });
-                    if !already_present {
-                        devices.push(json!({
-                            "deviceId": device_id,
-                            "name": device_id,
-                            "connectionState": "adb",
-                            "adbState": "device"
-                        }));
-                    }
-                }
+                reconcile_remote_device_list(devices, session, self.current_adb_device_ids());
             }
         }
         RemoteResponse {
@@ -653,6 +627,65 @@ fn session_can_access_device(session: &AuthenticatedSession, device_id: &str) ->
         .devices
         .iter()
         .any(|assigned| same_remote_device_identity(assigned, device_id))
+}
+
+fn reconcile_remote_device_list(
+    devices: &mut Vec<Value>,
+    session: &AuthenticatedSession,
+    current_adb_ids: Vec<String>,
+) {
+    let registered = std::mem::take(devices);
+    let mut reconciled: Vec<Value> = Vec::new();
+    for current_id in current_adb_ids {
+        if !session_can_access_device(session, &current_id)
+            || reconciled.iter().any(|device| {
+                device
+                    .get("deviceId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|known| same_remote_device_identity(known, &current_id))
+            })
+        {
+            continue;
+        }
+
+        // A Companion registry entry may retain ADB's old local " (n)" suffix.
+        // Preserve its useful metadata, but expose only the current online ADB ID;
+        // an account assignment is authorization, not evidence that a device is online.
+        let mut entry = registered
+            .iter()
+            .filter(|device| {
+                device
+                    .get("deviceId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|registered_id| {
+                        same_remote_device_identity(registered_id, &current_id)
+                    })
+            })
+            .max_by_key(|device| {
+                matches!(
+                    device.get("connectionState").and_then(Value::as_str),
+                    Some("ready")
+                )
+            })
+            .cloned()
+            .unwrap_or_else(|| json!({"connectionState": "adb"}));
+        let previous_id = entry
+            .get("deviceId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let replace_name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .is_none_or(|name| name.is_empty() || name == previous_id);
+        entry["deviceId"] = Value::String(current_id.clone());
+        entry["adbState"] = Value::String(String::from("device"));
+        if replace_name {
+            entry["name"] = Value::String(current_id);
+        }
+        reconciled.push(entry);
+    }
+    *devices = reconciled;
 }
 
 fn same_remote_device_identity(left: &str, right: &str) -> bool {
@@ -1014,5 +1047,38 @@ mod tests {
         );
         assert_eq!(parse_adb_device_id("device-1 offline product:x"), None);
         assert_eq!(parse_adb_device_id("device-1 unauthorized product:x"), None);
+    }
+
+    #[test]
+    fn current_adb_identity_replaces_stale_companion_entry_without_duplicate() {
+        // 场景：伴侣注册表保留带“ (2)”的旧 ID，但 ADB 已用无后缀 ID 在线；
+        // 手机端只能收到一个使用当前 ID 的设备条目，不能保留离线旧卡片。
+        let session = AuthenticatedSession {
+            token: String::from("test-token"),
+            username: String::from("operator"),
+            role: RemoteRole::User,
+            devices: [String::from(
+                "adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp",
+            )]
+            .into_iter()
+            .collect(),
+            password_change_required: false,
+        };
+        let current = "adb-R3CR70SJHHR-2VyQ5v._adb-tls-connect._tcp";
+        let mut devices = vec![json!({
+            "deviceId": "adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp",
+            "name": "adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp",
+            "connectionState": "disconnected"
+        })];
+
+        reconcile_remote_device_list(&mut devices, &session, vec![String::from(current)]);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["deviceId"], current);
+        assert_eq!(devices[0]["name"], current);
+        assert_eq!(devices[0]["adbState"], "device");
+
+        reconcile_remote_device_list(&mut devices, &session, Vec::new());
+        assert!(devices.is_empty());
     }
 }

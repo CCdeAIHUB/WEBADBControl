@@ -29,7 +29,7 @@
 
 Windows 客户端的 `ProjectionSession` 可选择 ADB scrcpy 或 Companion QUIC，支持 480p/720p/1080p、0.5–20 Mbps、30/45/60 FPS，并使用连续触控事件。Web 端现已通过 Core `adb.scrcpy.start/stop` 管理相同 scrcpy 4.0 服务，由 Go 网关转发带帧元数据的 H.264 包和连续触控事件。投屏握手会用 Android 忽略的 `KEYCODE_UNKNOWN` 探测 shell 输入权限，并在 WebSocket `meta.controlTransport` 中返回 `scrcpy-control` 或 `companion-accessibility`；后者会把浏览器的一次指针操作聚合为点击或滑动，经现有伴侣版本、安装和无障碍检查后执行。
 
-远程账号保存的是设备授权身份，而不是 ADB 本机临时序号。无线调试 mDNS 重连时若 ` (n)` 冲突后缀发生变化，Core 和 Go 网关会先按规范化后的 mDNS 服务名校验授权，再把请求改写到当前在线序号；不同服务名仍严格拒绝。移动客户端的设备卡、ADB 命令、截图和 H.264 投屏因此使用同一个当前在线 ID。移动端伴侣页通过认证后的 Web 远程接口读取状态、能力和权限，可与 Web 端一致地使用 ADB broadcast 兼容通道，并明确标示实际通道。
+远程账号保存的是设备授权身份，而不是在线状态或 ADB 本机临时序号。无线调试 mDNS 重连时若 ` (n)` 冲突后缀发生变化，Core 和 Go 网关会先按规范化后的 mDNS 服务名校验授权，再把请求改写到当前在线序号；不同服务名仍严格拒绝。移动设备列表只返回当前在线 ADB 设备，不会根据历史授权生成离线卡片；设备卡、ADB 命令、截图和 H.264 投屏因此使用同一个当前在线 ID。移动端伴侣页通过认证后的 Web 远程接口读取状态、能力和权限，可与 Web 端一致地使用 ADB broadcast 兼容通道，并明确标示实际通道。
 
 视频 WebSocket 保留原有 v1 的 `kind + H.264` 包格式。新页面通过 `protocol=2` 协商 `kind + uint64 PTS(微秒，大端) + H.264`，并以 `meta.streamProtocol=2` 确认；MSE 和 WebCodecs 使用 scrcpy 的真实显示时间戳，而不是用帧率下拉框伪造固定帧间隔。服务端继续兼容未携带协议参数的旧标签页，异常或过长的时间戳间隔会回退或限制为实时播放安全范围。
 
