@@ -58,8 +58,14 @@ func NewHardwareMonitorManager(collector hardwareCollector, interval time.Durati
 func (m *HardwareMonitorManager) Start(deviceID string, metrics []string) HardwareMonitorStatus {
 	m.mu.Lock()
 	if current := m.tasks[deviceID]; current != nil {
-		m.mu.Unlock()
-		return current.snapshot()
+		status := current.snapshot()
+		if status.Running {
+			m.mu.Unlock()
+			return status
+		}
+		// A manually stopped task keeps its history for the UI, but a later
+		// explicit Start must create a fresh sampling loop.
+		delete(m.tasks, deviceID)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	task := &hardwareMonitorTask{

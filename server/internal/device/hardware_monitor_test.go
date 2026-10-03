@@ -78,6 +78,20 @@ func TestHardwareMonitorStartIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestHardwareMonitorCanRestartAfterExplicitStop(t *testing.T) {
+	manager := NewHardwareMonitorManager(func(context.Context, string) (HardwareSnapshot, error) {
+		return HardwareSnapshot{CapturedAt: time.Now().UTC()}, nil
+	}, 25*time.Millisecond, 10)
+	first := manager.Start("phone", nil)
+	manager.Stop("phone")
+	time.Sleep(time.Millisecond)
+	second := manager.Start("phone", nil)
+	defer manager.Stop("phone")
+	if !second.Running || !second.StartedAt.After(first.StartedAt) {
+		t.Fatalf("stopped task was not restarted: first=%#v second=%#v", first, second)
+	}
+}
+
 func TestHardwareMonitorReportsPersistenceFailure(t *testing.T) {
 	// 场景：持久化目录不可创建时，后台任务仍可运行，但错误必须通过状态接口可见。
 	parentFile := filepath.Join(t.TempDir(), "not-a-directory")
