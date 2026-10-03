@@ -7,6 +7,7 @@ import { reportClientError } from '@/services/logs'
 import { browserScreenDecoderPreference, createScreenDecoder, screenDecoderFallback, screenDecoderStatusText, type ScreenDecoder, type ScreenDecoderMode } from '@/services/screenDecoder'
 import { screenGestureAction, type ScreenGestureStart, type ScreenPoint } from '@/services/screenControl'
 import { parseScreenPacket } from '@/services/screenPacket'
+import { RawPcmPlayer } from '@/services/rawPcmPlayer'
 import { useUiStore } from '@/stores/ui'
 import UiSelect from '@/components/common/UiSelect.vue'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
@@ -25,6 +26,7 @@ const streamError = ref('')
 const streamSize = ref({ width: 0, height: 0 })
 const controlTransport = ref<'scrcpy-control' | 'companion-accessibility'>('scrcpy-control')
 const streamProtocol = ref(1)
+const audioState = ref<'waiting' | 'live' | 'unavailable'>('waiting')
 const isFullscreen = ref(false)
 const companionPrompt = ref(false)
 const companionReinstallPrompt = ref(false)
@@ -44,6 +46,7 @@ let actionInFlight = false
 let lastActionAt = 0
 let firstFrameTimer: number | undefined
 let gestureActionQueue = Promise.resolve()
+let audioPlayer: RawPcmPlayer | undefined
 
 const statusText = computed(() => streamError.value || ({ idle: '投屏未开启', connecting: '正在启动实时投屏', live: '实时投屏运行中', error: '画面已断开' })[status.value])
 const canStop = computed(() => connected.value || status.value === 'connecting')
@@ -57,10 +60,14 @@ function start() {
   lastFrameAt.value = ''
   connected.value = true
   intentionalClose = false
+	audioPlayer?.close()
+	audioPlayer = new RawPcmPlayer()
+	audioPlayer.start()
+	audioState.value = 'waiting'
   const seq = connectionSeq + 1
   connectionSeq = seq
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}&protocol=2`)
+  const current = new WebSocket(`${protocol}//${location.host}/api/v1/devices/${encodeURIComponent(props.deviceId)}/screen?fps=${encodeURIComponent(requestedFPS.value)}&protocol=3`)
   socket = current
   current.binaryType = 'arraybuffer'
   decoderPacketQueue = Promise.resolve()
@@ -91,7 +98,7 @@ function start() {
 async function handleStreamMessage(event: MessageEvent, seq: number) {
     if (seq !== connectionSeq) return
     if (typeof event.data === 'string') {
-      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string; controlTransport?: string; streamProtocol?: number }
+      const meta = JSON.parse(event.data) as { type?: string; width?: number; height?: number; message?: string; controlTransport?: string; streamProtocol?: number; audioCodec?: string }
       if (meta.type === 'error') {
         streamError.value = meta.message || '实时投屏启动失败'
         status.value = 'error'
@@ -101,7 +108,8 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
       if (meta.type !== 'meta' || !meta.width || !meta.height) { streamError.value = '投屏元数据无效'; status.value = 'error'; return }
       streamSize.value = { width: meta.width, height: meta.height }
       controlTransport.value = meta.controlTransport === 'companion-accessibility' ? 'companion-accessibility' : 'scrcpy-control'
-      streamProtocol.value = meta.streamProtocol === 2 ? 2 : 1
+      streamProtocol.value = meta.streamProtocol === 3 ? 3 : meta.streamProtocol === 2 ? 2 : 1
+	  audioState.value = meta.audioCodec === 'raw-s16le-48000-stereo' ? 'waiting' : 'unavailable'
       decoder?.dispose()
       decoder = undefined
       await nextTick()
@@ -114,6 +122,8 @@ async function handleStreamMessage(event: MessageEvent, seq: number) {
     if (!(event.data instanceof ArrayBuffer) || !decoder || event.data.byteLength < 2) return
     const packet = parseScreenPacket(new Uint8Array(event.data), streamProtocol.value)
     const { kind, data, presentationTimeUs } = packet
+    if (kind === 3) return
+    if (kind === 4) { audioPlayer?.push(data); audioState.value = 'live'; return }
     if (kind === 1) {
       try {
         await decoder.configure(data)
@@ -166,6 +176,7 @@ function stop() {
   intentionalClose = true
   socket?.close()
   decoder?.dispose(); decoder = undefined
+  audioPlayer?.close(); audioPlayer = undefined
   clearFirstFrameTimer()
   decoderPacketQueue = Promise.resolve()
   activePointers.clear(); lastTouchMoveAt.clear(); gestureStarts.clear()
@@ -393,6 +404,7 @@ onBeforeUnmount(() => {
       </label>
       <span class="rounded-md border border-brand-400/20 bg-brand-400/10 px-2 py-1 text-brand-200">后端：scrcpy H.264 视频流</span>
       <span class="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-1 text-sky-200">解码：{{ screenDecoderStatusText(decoderMode) }}</span>
+      <span class="rounded-md border px-2 py-1" :class="audioState === 'live' ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-400'">声音：{{ audioState === 'live' ? '设备音频播放中' : audioState === 'unavailable' ? '设备不支持音频捕获' : '等待音频' }}</span>
       <span class="text-slate-400">{{ controlTransport === 'companion-accessibility' ? '控制：伴侣无障碍点击与滑动' : '移动端支持单指、多指触摸与拖动控制' }}</span>
     </div>
     <div class="relative grid place-items-center" :class="isFullscreen ? 'min-h-0 flex-1 p-2 sm:p-4' : 'min-h-[460px] p-5'">

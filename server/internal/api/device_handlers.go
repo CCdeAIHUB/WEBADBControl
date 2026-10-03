@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CCdeAIHUB/WEBADBControl/server/internal/apperror"
@@ -91,13 +92,14 @@ func (s *Server) deviceAction(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) screenshot(writer http.ResponseWriter, request *http.Request) {
-	png, err := s.devices.Screenshot(request.Context(), request.PathValue("id"))
+	png, source, err := s.devices.ScreenshotWithSource(request.Context(), request.PathValue("id"))
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, err)
 		return
 	}
 	writer.Header().Set("Content-Type", "image/png")
 	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("X-ADBControl-Screenshot-Source", source)
 	if _, err := writer.Write(png); err != nil {
 		s.logger.Warn("screenshot_response_write_failed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 	}
@@ -134,6 +136,54 @@ func (s *Server) remoteScreenshot(writer http.ResponseWriter, request *http.Requ
 	s.screenshot(writer, request)
 }
 
+func (s *Server) hardwareMonitorStatus(writer http.ResponseWriter, request *http.Request) {
+	writeData(writer, http.StatusOK, s.devices.HardwareMonitorStatus(request.PathValue("id")))
+}
+
+func (s *Server) startHardwareMonitor(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Metrics []string `json:"metrics"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	writeData(writer, http.StatusOK, s.devices.StartHardwareMonitor(request.PathValue("id"), body.Metrics))
+}
+
+func (s *Server) stopHardwareMonitor(writer http.ResponseWriter, request *http.Request) {
+	writeData(writer, http.StatusOK, s.devices.StopHardwareMonitor(request.PathValue("id")))
+}
+
+func (s *Server) remoteHardwareMonitorStatus(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRemoteDevice(writer, request) {
+		return
+	}
+	s.hardwareMonitorStatus(writer, request)
+}
+
+func (s *Server) remoteStartHardwareMonitor(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRemoteDevice(writer, request) {
+		return
+	}
+	s.startHardwareMonitor(writer, request)
+}
+
+func (s *Server) remoteStopHardwareMonitor(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRemoteDevice(writer, request) {
+		return
+	}
+	s.stopHardwareMonitor(writer, request)
+}
+
+func (s *Server) requireRemoteDevice(writer http.ResponseWriter, request *http.Request) bool {
+	session, ok := remoteSessionFromContext(request.Context())
+	if !ok || !session.canAccessDevice(request.PathValue("id")) {
+		writeError(writer, http.StatusForbidden, errForbidden())
+		return false
+	}
+	return true
+}
+
 func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Request) {
 	connection, err := screenUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
@@ -159,9 +209,10 @@ func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Req
 	defer session.Close()
 	width, height := session.Size()
 	s.logger.Info("screen_websocket_started", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "backend", "scrcpy-h264", "controlTransport", controlTransport, "streamProtocol", streamProtocol, "width", width, "height", height, "fps", frameRate)
-	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height, "controlTransport": controlTransport, "streamProtocol": streamProtocol}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "meta", "codec": "h264", "width": width, "height": height, "controlTransport": controlTransport, "streamProtocol": streamProtocol, "audioCodec": map[bool]string{true: "raw-s16le-48000-stereo", false: ""}[session.AudioAvailable()]}); err != nil {
 		return
 	}
+	var writeMu sync.Mutex
 	go func() {
 		for {
 			var control struct {
@@ -185,6 +236,27 @@ func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Req
 			}
 		}
 	}()
+	if streamProtocol >= 3 && session.AudioAvailable() {
+		go func() {
+			for {
+				packet, audioErr := session.ReadAudioPacket()
+				if audioErr != nil {
+					return
+				}
+				kind := byte(4)
+				if packet.Config {
+					kind = 3
+				}
+				writeMu.Lock()
+				audioErr = connection.WriteMessage(websocket.BinaryMessage, encodeScreenPacket(streamProtocol, kind, packet.PresentationTimeUS, packet.Data))
+				writeMu.Unlock()
+				if audioErr != nil {
+					session.Close()
+					return
+				}
+			}
+		}()
+	}
 	videoPackets := 0
 	configPackets := 0
 	keyFrames := 0
@@ -218,7 +290,10 @@ func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Req
 		} else {
 			videoPackets++
 		}
-		if err := connection.WriteMessage(websocket.BinaryMessage, encodeScreenPacket(streamProtocol, messageType, packet.PresentationTimeUS, packet.Data)); err != nil {
+		writeMu.Lock()
+		err = connection.WriteMessage(websocket.BinaryMessage, encodeScreenPacket(streamProtocol, messageType, packet.PresentationTimeUS, packet.Data))
+		writeMu.Unlock()
+		if err != nil {
 			s.logger.Info("screen_websocket_closed", "traceId", writer.Header().Get("X-Request-ID"), "error", err)
 			return
 		}
@@ -226,6 +301,9 @@ func (s *Server) serveScreenSocket(writer http.ResponseWriter, request *http.Req
 }
 
 func screenStreamProtocol(requested string) int {
+	if requested == "3" {
+		return 3
+	}
 	if requested == "2" {
 		return 2
 	}

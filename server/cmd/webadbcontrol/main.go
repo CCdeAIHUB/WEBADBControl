@@ -62,6 +62,10 @@ func main() {
 		VersionName: applicationConfig.CompanionVersionName,
 	}))
 	devices.SetLogger(logger)
+	if err := devices.EnableHardwareMonitorPersistence(filepath.Join(applicationConfig.DataDir, "hardware-monitor-tasks.json")); err != nil {
+		logger.Error("hardware_monitor_recovery_failed", "error", err)
+		os.Exit(1)
+	}
 	repository, err := automation.OpenRepository(filepath.Join(applicationConfig.DataDir, "automation.sqlite"))
 	if err != nil {
 		logger.Error("automation_repository_failed", "error", err)

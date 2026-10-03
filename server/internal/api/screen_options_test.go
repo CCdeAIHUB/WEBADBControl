@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 )
@@ -34,5 +35,14 @@ func TestScreenPacketV2CarriesScrcpyPresentationTimestamp(t *testing.T) {
 	v1 := encodeScreenPacket(1, 2, 9_876_543, payload)
 	if len(v1) != 1+len(payload) || v1[0] != 2 || v1[1] != payload[0] {
 		t.Fatalf("v1 compatibility changed: %x", v1)
+	}
+}
+
+func TestScreenProtocolThreeKeepsTimestampedPacketContract(t *testing.T) {
+	// 场景：v3 为音频增加 kind=3/4，但仍沿用 v2 的时间戳头，旧视频解码不受影响。
+	payload := []byte{1, 2, 3}
+	packet := encodeScreenPacket(3, 4, 42, payload)
+	if packet[0] != 4 || binary.BigEndian.Uint64(packet[1:9]) != 42 || !bytes.Equal(packet[9:], payload) {
+		t.Fatalf("unexpected v3 packet: %v", packet)
 	}
 }

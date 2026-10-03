@@ -32,16 +32,18 @@ type ScrcpyOptions struct {
 // Closing it never disconnects ADB; it only removes its own tcp forward and
 // asks Core to stop the matching scrcpy app_process command.
 type ScrcpySession struct {
-	service   *Service
-	deviceID  string
-	sessionID string
-	port      int
-	video     net.Conn
-	control   net.Conn
-	controlMu sync.Mutex
-	closeOnce sync.Once
-	width     int
-	height    int
+	service        *Service
+	deviceID       string
+	sessionID      string
+	port           int
+	video          net.Conn
+	audio          net.Conn
+	control        net.Conn
+	controlMu      sync.Mutex
+	closeOnce      sync.Once
+	width          int
+	height         int
+	audioAvailable bool
 }
 
 type scrcpyStartResult struct {
@@ -106,9 +108,17 @@ func (s *Service) StartScrcpy(ctx context.Context, deviceID string, options Scrc
 		cleanupForward()
 		return nil, err
 	}
+	audio, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 2*time.Second)
+	if err != nil {
+		_ = video.Close()
+		cleanupProcess()
+		cleanupForward()
+		return nil, apperror.Wrap("SCRCPY_AUDIO_UNAVAILABLE", "无法连接投屏音频通道", "device.screen", true, err)
+	}
 	control, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 2*time.Second)
 	if err != nil {
 		_ = video.Close()
+		_ = audio.Close()
 		cleanupProcess()
 		cleanupForward()
 		return nil, apperror.Wrap("SCRCPY_CONTROL_UNAVAILABLE", "无法连接投屏触控通道", "device.screen", true, err)
@@ -116,6 +126,16 @@ func (s *Service) StartScrcpy(ctx context.Context, deviceID string, options Scrc
 	width, height, err := readScrcpyHandshake(video)
 	if err != nil {
 		_ = video.Close()
+		_ = audio.Close()
+		_ = control.Close()
+		cleanupProcess()
+		cleanupForward()
+		return nil, err
+	}
+	audioAvailable, err := readScrcpyAudioHandshake(audio)
+	if err != nil {
+		_ = video.Close()
+		_ = audio.Close()
 		_ = control.Close()
 		cleanupProcess()
 		cleanupForward()
@@ -124,7 +144,7 @@ func (s *Service) StartScrcpy(ctx context.Context, deviceID string, options Scrc
 
 	return &ScrcpySession{
 		service: s, deviceID: deviceID, sessionID: sessionID, port: port,
-		video: video, control: control, width: width, height: height,
+		video: video, audio: audio, control: control, width: width, height: height, audioAvailable: audioAvailable,
 	}, nil
 }
 
@@ -216,12 +236,30 @@ func readScrcpyHandshake(connection net.Conn) (int, int, error) {
 	return width, height, nil
 }
 
-func (s *ScrcpySession) Size() (int, int) { return s.width, s.height }
+func readScrcpyAudioHandshake(connection net.Conn) (bool, error) {
+	codec := make([]byte, 4)
+	if err := readExactly(connection, codec); err != nil {
+		return false, apperror.Wrap("SCRCPY_AUDIO_HANDSHAKE_INVALID", "投屏音频握手不完整", "device.screen.audio", true, err)
+	}
+	if codec[0] == 0 && codec[1] == 0 && codec[2] == 0 && codec[3] == 0 {
+		return false, nil
+	}
+	if string(codec) != "\x00raw" {
+		return false, apperror.New("SCRCPY_AUDIO_CODEC_UNSUPPORTED", fmt.Sprintf("投屏返回了不支持的音频编码 %x", codec), "device.screen.audio", false)
+	}
+	return true, nil
+}
+
+func (s *ScrcpySession) Size() (int, int)     { return s.width, s.height }
+func (s *ScrcpySession) AudioAvailable() bool { return s.audioAvailable }
 
 func (s *ScrcpySession) Close() {
 	s.closeOnce.Do(func() {
 		if s.video != nil {
 			_ = s.video.Close()
+		}
+		if s.audio != nil {
+			_ = s.audio.Close()
 		}
 		if s.control != nil {
 			_ = s.control.Close()
@@ -230,6 +268,31 @@ func (s *ScrcpySession) Close() {
 		_ = s.service.core.Call(context.Background(), "adb.scrcpy.stop", map[string]any{"sessionId": s.sessionID}, &ignored)
 		_, _ = s.service.Exec(context.Background(), DeviceArgs(s.deviceID, "forward", "--remove", fmt.Sprintf("tcp:%d", s.port)))
 	})
+}
+
+func (s *ScrcpySession) ReadAudioPacket() (ScrcpyVideoPacket, error) {
+	if !s.audioAvailable {
+		return ScrcpyVideoPacket{}, io.EOF
+	}
+	metadata := make([]byte, 12)
+	if err := readExactly(s.audio, metadata); err != nil {
+		return ScrcpyVideoPacket{}, err
+	}
+	flags := binary.BigEndian.Uint64(metadata[:8])
+	size := int(binary.BigEndian.Uint32(metadata[8:12]))
+	if size < 1 || size > maxScrcpyPacketSize {
+		return ScrcpyVideoPacket{}, apperror.New("SCRCPY_AUDIO_PACKET_INVALID", "投屏音频包大小无效", "device.screen.audio", true)
+	}
+	packet := make([]byte, size)
+	if err := readExactly(s.audio, packet); err != nil {
+		return ScrcpyVideoPacket{}, err
+	}
+	config := flags&(1<<62) != 0
+	pts := flags & ((uint64(1) << 61) - 1)
+	if config {
+		pts = 0
+	}
+	return ScrcpyVideoPacket{Data: packet, PresentationTimeUS: pts, Config: config}, nil
 }
 
 func (s *ScrcpySession) SendTouch(action int, pointerID uint32, x, y, width, height int) error {

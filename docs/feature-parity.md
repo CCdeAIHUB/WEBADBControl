@@ -4,9 +4,10 @@
 |---|---|---|
 | 设备发现、USB/无线连接 | 工作台、设备中心 | `GET /devices`、`POST /devices/connect` |
 | 设备详情与状态 | 设备详情 / 概览 | `GET /devices/{id}/overview` |
-| 实时画面与触控 | scrcpy H.264 视频流（可显式启停、选择 15/30/60 FPS、连续触控；受限 OEM 自动使用伴侣手势） | WebSocket `/screen?fps=`、scrcpy 控制通道、`POST /actions` |
+| 实时画面、设备声音与触控 | scrcpy H.264 视频流 + Raw PCM 设备音频（可显式启停、选择 15/30/60 FPS、连续触控；受限 OEM 自动使用伴侣手势） | WebSocket `/screen?fps=&protocol=3`、scrcpy 音视频/控制通道、`POST /actions` |
 | 返回、主页、多任务、电源、音量 | 屏幕控制栏 | 固定 ADB 参数白名单；OEM 拒绝 `INJECT_EVENTS` 时主页走 HOME Intent，返回/多任务/触摸走伴侣无障碍 |
 | 硬件与电池信息 | 硬件信息 | `getprop`、`dumpsys battery` |
+| 后台性能记录 | 服务端单设备串行记录；离开页面继续，只有手动停止 | `/hardware-monitor`；独立于自动化任务 |
 | 应用列表、启动、停止、清除、卸载、安装 | 应用管理 | `/packages/*` |
 | 文件浏览、上传、下载 | 文件管理 | `/files/*` |
 | ADB 终端 | 安全终端 | `args: string[]`，不经过主机 Shell |

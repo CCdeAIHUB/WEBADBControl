@@ -1,0 +1,5 @@
+FROM webadbcontrol:6af135c
+COPY webadbcontrol /opt/webadbcontrol/webadbcontrol
+COPY adbcontrol-core /opt/webadbcontrol/adbcontrol-core
+COPY web /opt/webadbcontrol/web
+COPY companion.apk /opt/webadbcontrol/companion.apk

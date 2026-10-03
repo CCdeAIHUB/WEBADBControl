@@ -68,3 +68,20 @@ func TestReadScrcpyPacketPreservesPresentationTimestamp(t *testing.T) {
 		t.Fatalf("unexpected packet: %#v", packet)
 	}
 }
+
+func TestReadRawAudioPacketPreservesTimestamp(t *testing.T) {
+	// 场景：scrcpy 原始 PCM 音频沿用帧元数据，服务端必须保留 PTS 并原样转发采样字节。
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		metadata := make([]byte, 12)
+		binary.BigEndian.PutUint64(metadata[:8], 987_654)
+		binary.BigEndian.PutUint32(metadata[8:], 4)
+		_, _ = server.Write(append(metadata, 1, 2, 3, 4))
+	}()
+	packet, err := (&ScrcpySession{audio: client, audioAvailable: true}).ReadAudioPacket()
+	if err != nil || packet.PresentationTimeUS != 987_654 || len(packet.Data) != 4 {
+		t.Fatalf("unexpected audio packet: %#v err=%v", packet, err)
+	}
+}

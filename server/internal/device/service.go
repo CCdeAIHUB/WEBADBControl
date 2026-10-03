@@ -36,6 +36,8 @@ type Service struct {
 	companionRequirement  CompanionRequirement
 	companionUpgradeLocks sync.Map
 	inputTransports       sync.Map
+	hardwareMonitors      *HardwareMonitorManager
+	screenshotStates      sync.Map
 	logger                *slog.Logger
 }
 
@@ -50,7 +52,24 @@ func NewService(core coreipc.Caller, options ...ServiceOption) *Service {
 	for _, option := range options {
 		option(service)
 	}
+	service.hardwareMonitors = NewHardwareMonitorManager(service.Hardware, 5*time.Second, defaultHardwareMonitorHistory)
 	return service
+}
+
+func (s *Service) StartHardwareMonitor(deviceID string, metrics []string) HardwareMonitorStatus {
+	return s.hardwareMonitors.Start(deviceID, metrics)
+}
+
+func (s *Service) StopHardwareMonitor(deviceID string) HardwareMonitorStatus {
+	return s.hardwareMonitors.Stop(deviceID)
+}
+
+func (s *Service) HardwareMonitorStatus(deviceID string) HardwareMonitorStatus {
+	return s.hardwareMonitors.Status(deviceID)
+}
+
+func (s *Service) EnableHardwareMonitorPersistence(path string) error {
+	return s.hardwareMonitors.EnablePersistence(path)
 }
 
 func (s *Service) SetLogger(logger *slog.Logger) { s.logger = logger }
@@ -367,17 +386,79 @@ func (s *Service) ActionWithOutcome(ctx context.Context, deviceID string, reques
 }
 
 func (s *Service) Screenshot(ctx context.Context, deviceID string) ([]byte, error) {
+	png, _, err := s.ScreenshotWithSource(ctx, deviceID)
+	return png, err
+}
+
+type screenshotState struct {
+	mu               sync.Mutex
+	last             []byte
+	lastAt           time.Time
+	lastSource       string
+	companionRetryAt time.Time
+}
+
+func (s *Service) ScreenshotWithSource(ctx context.Context, deviceID string) ([]byte, string, error) {
+	value, _ := s.screenshotStates.LoadOrStore(deviceID, &screenshotState{})
+	state := value.(*screenshotState)
+	if !state.mu.TryLock() {
+		return nil, "", apperror.New("SCREENSHOT_BUSY", "上一帧截图仍在处理中", "device.screen", true).
+			WithSuggestion("请增大截图刷新间隔，系统不会排队积压截图请求")
+	}
+	defer state.mu.Unlock()
+	cacheTTL := time.Second
+	if state.lastSource == "adb" {
+		// ADB screencap commonly takes 1.5-3 seconds. Reusing that frame for three
+		// seconds prevents short UI intervals from creating transport backpressure.
+		cacheTTL = 3 * time.Second
+	}
+	if len(state.last) > 0 && time.Since(state.lastAt) < cacheTTL {
+		return append([]byte(nil), state.last...), state.lastSource + "-cache", nil
+	}
+
+	// Companion screenshots avoid the multi-second ADB screencap path. A failed
+	// companion route cools down so an offline App cannot delay every refresh.
+	if time.Now().After(state.companionRetryAt) {
+		captureCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		var envelope map[string]any
+		err := s.core.Call(captureCtx, "device.invoke", map[string]any{
+			"deviceId": deviceID, "capabilityId": "android.accessibility.control",
+			"operation": "accessibility.screenshot", "args": map[string]any{"maxSize": 960},
+		}, &envelope)
+		cancel()
+		if err == nil {
+			result := companionInvocationResult(envelope)
+			encoded, _ := result["pngBase64"].(string)
+			if png, decodeErr := base64.StdEncoding.DecodeString(encoded); decodeErr == nil && len(png) > 8 {
+				state.last, state.lastAt, state.lastSource = append([]byte(nil), png...), time.Now(), "companion"
+				return png, "companion", nil
+			}
+		}
+		state.companionRetryAt = time.Now().Add(time.Minute)
+	}
+
 	// Device-side base64 keeps binary PNG bytes out of the Core UTF-8 JSON contract.
 	output, err := s.Exec(ctx, []string{"-s", deviceID, "shell", "screencap -p | base64"})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cleaned := strings.NewReplacer("\r", "", "\n", "", " ", "").Replace(output.Stdout)
 	png, decodeErr := base64.StdEncoding.DecodeString(cleaned)
 	if decodeErr != nil {
-		return nil, apperror.Wrap("SCREENSHOT_INVALID", "设备截图无法解析", "device.screen", true, decodeErr)
+		return nil, "", apperror.Wrap("SCREENSHOT_INVALID", "设备截图无法解析", "device.screen", true, decodeErr)
 	}
-	return png, nil
+	state.last, state.lastAt, state.lastSource = append([]byte(nil), png...), time.Now(), "adb"
+	return png, "adb", nil
+}
+
+func companionInvocationResult(envelope map[string]any) map[string]any {
+	if result, ok := envelope["result"].(map[string]any); ok {
+		return result
+	}
+	outer, _ := envelope["envelope"].(map[string]any)
+	payload, _ := outer["payload"].(map[string]any)
+	result, _ := payload["result"].(map[string]any)
+	return result
 }
 
 func (s *Service) Overview(ctx context.Context, deviceID string) (map[string]any, error) {

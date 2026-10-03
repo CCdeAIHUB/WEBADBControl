@@ -12,6 +12,7 @@ WORKDIR /src/core
 COPY core/Cargo.toml core/Cargo.lock ./
 COPY core/crates ./crates
 COPY core/assets ./assets
+COPY companion.apk ./companion.apk
 RUN cargo build --locked --release -p adbcontrol-core
 
 FROM golang:1.23-bookworm AS server-build

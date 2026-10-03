@@ -195,7 +195,11 @@ pub fn build_scrcpy_server_args(config: &ScrcpyServerConfig) -> Result<Vec<Strin
         "4.0".to_string(),
         format!("scid={:08x}", config.scid),
         "log_level=info".to_string(),
-        "audio=false".to_string(),
+        // Raw 48 kHz stereo PCM avoids adding codec dependencies to the Web and
+        // Android remote clients. Android may explicitly disable this stream on
+        // unsupported devices; video and control remain available in that case.
+        "audio=true".to_string(),
+        "audio_codec=raw".to_string(),
         "video=true".to_string(),
         "control=true".to_string(),
         "video_codec=h264".to_string(),
@@ -314,6 +318,8 @@ mod tests {
         assert!(args.contains(&"scid=1234abcd".to_string()));
         // Browser HTTP fallback uses TinyH264, whose documented ceiling is AVC Baseline Level 4.
         assert!(args.contains(&"video_codec_options=profile=1,level=2048".to_string()));
+        assert!(args.contains(&"audio=true".to_string()));
+        assert!(args.contains(&"audio_codec=raw".to_string()));
         assert!(!args.iter().any(|argument| argument.contains('&')));
     }
 
