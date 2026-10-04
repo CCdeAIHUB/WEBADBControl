@@ -36,6 +36,10 @@ type CompanionStatus struct {
 	RequiredVersionCode  int64  `json:"requiredVersionCode,omitempty"`
 	RequiredVersionName  string `json:"requiredVersionName,omitempty"`
 	UpdateRequired       bool   `json:"updateRequired"`
+	ADBTransport         string `json:"adbTransport"`
+	QUICTransport        string `json:"quicTransport"`
+	QUICErrorCode        string `json:"quicErrorCode,omitempty"`
+	QUICMessage          string `json:"quicMessage"`
 }
 
 func (s *Service) ExecuteCompanionCommand(ctx context.Context, deviceID, capabilityID, operation string, args map[string]any) (string, error) {
@@ -172,6 +176,9 @@ func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (Compani
 		RequiredVersionCode:  requirement.VersionCode,
 		RequiredVersionName:  requirement.VersionName,
 		UpdateRequired:       requirement.configured() && (!packageInfo.Installed || packageInfo.VersionCode < requirement.VersionCode),
+		ADBTransport:         "disconnected",
+		QUICTransport:        "disconnected",
+		QUICMessage:          "伴侣 QUIC 实时会话尚未建立。应用已安装或正在运行并不代表 QUIC 已完成配置和握手。",
 	}
 	if !packageInfo.Installed {
 		return CompanionStatus{
@@ -202,8 +209,21 @@ func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (Compani
 		return status, nil
 	}
 	status.ADBResponsive = true
+	status.ADBTransport = "connected"
 	status.State = "adb-responsive"
-	status.Message = "伴侣应用已安装，且 ADB broadcast 探测可达。"
+	status.Message = "伴侣应用已安装，ADB 配置/兼容通道可用。"
+	var capabilities []map[string]any
+	if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil {
+		status.QUICTransport = "connected"
+		status.QUICMessage = "伴侣 QUIC 实时会话已建立，可同步实时能力与权限。"
+		status.State = "ready"
+	} else if isCompanionSessionUnavailable(err) {
+		status.QUICErrorCode = companionErrorCode(err)
+	} else {
+		status.QUICTransport = "error"
+		status.QUICErrorCode = companionErrorCode(err)
+		status.QUICMessage = "查询伴侣 QUIC 实时会话失败，请根据错误码检查 Core 日志。"
+	}
 	return status, nil
 }
 

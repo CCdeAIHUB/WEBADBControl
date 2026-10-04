@@ -11,7 +11,8 @@ import (
 )
 
 type companionStatusCaller struct {
-	calls [][]string
+	calls         [][]string
+	quicConnected bool
 }
 
 type companionFallbackCaller struct {
@@ -46,6 +47,13 @@ func (c *companionFallbackCaller) Call(_ context.Context, method string, params 
 }
 
 func (c *companionStatusCaller) Call(_ context.Context, method string, params any, target any) error {
+	if method == "device.getCapabilities" {
+		if !c.quicConnected {
+			return apperror.New("COMPANION_DEVICE_NOT_CONNECTED", "QUIC session is not connected", "companion.registry", true)
+		}
+		*(target.(*[]map[string]any)) = []map[string]any{{"id": "android.accessibility.control"}}
+		return nil
+	}
 	if method != "adb.exec" {
 		return nil
 	}
@@ -75,6 +83,9 @@ func TestCompanionStatusUsesSideEffectFreeADBProbe(t *testing.T) {
 	if !status.Installed || !status.ADBResponsive || status.State != "adb-responsive" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
+	if status.ADBTransport != "connected" || status.QUICTransport != "disconnected" || status.QUICErrorCode != "COMPANION_DEVICE_NOT_CONNECTED" {
+		t.Fatalf("transport status must distinguish ADB and QUIC: %#v", status)
+	}
 	if len(caller.calls) != 4 {
 		t.Fatalf("calls = %#v, want installed check, version check, broadcast and result read", caller.calls)
 	}
@@ -87,6 +98,16 @@ func TestCompanionStatusUsesSideEffectFreeADBProbe(t *testing.T) {
 	wantPrefix := []string{"-s", "SM-F926N", "shell", "pm", "list", "packages", "com.adbcontrol.companion"}
 	if !reflect.DeepEqual(caller.calls[0], wantPrefix) {
 		t.Fatalf("package check = %#v, want %#v", caller.calls[0], wantPrefix)
+	}
+}
+
+func TestCompanionStatusReportsLiveQuicSessionSeparately(t *testing.T) {
+	status, err := NewService(&companionStatusCaller{quicConnected: true}).CompanionStatus(context.Background(), "SM-F926N")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ADBTransport != "connected" || status.QUICTransport != "connected" || status.State != "ready" {
+		t.Fatalf("unexpected dual-channel status: %#v", status)
 	}
 }
 

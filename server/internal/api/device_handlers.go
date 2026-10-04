@@ -51,6 +51,48 @@ func (s *Server) listDevices(writer http.ResponseWriter, request *http.Request) 
 	writeData(writer, http.StatusOK, devices)
 }
 
+func (s *Server) updateDevice(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Remark string `json:"remark"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	updated, err := s.devices.SetRemark(request.PathValue("id"), body.Remark)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeData(writer, http.StatusOK, updated)
+}
+
+func (s *Server) remoteDeviceMetadata(writer http.ResponseWriter, request *http.Request) {
+	session, ok := remoteSessionFromContext(request.Context())
+	requested := request.PathValue("id")
+	if !ok || !session.canAccessDevice(requested) {
+		writeError(writer, http.StatusForbidden, errForbidden())
+		return
+	}
+	devices, err := s.devices.List(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, err)
+		return
+	}
+	for _, candidate := range devices {
+		if candidate.ID == requested || device.EquivalentDeviceID(candidate.ID, requested) {
+			writeData(writer, http.StatusOK, candidate)
+			return
+		}
+		for _, alias := range candidate.Aliases {
+			if alias == requested || device.EquivalentDeviceID(alias, requested) {
+				writeData(writer, http.StatusOK, candidate)
+				return
+			}
+		}
+	}
+	writeError(writer, http.StatusNotFound, apperror.New("DEVICE_NOT_FOUND", "设备目录中没有该设备", "device.catalog", false))
+}
+
 func (s *Server) listRememberedDevices(request *http.Request) ([]device.Device, error) {
 	devices, err := s.devices.List(request.Context())
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 type Device struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
+	Remark     string   `json:"remark,omitempty"`
 	Model      string   `json:"model,omitempty"`
 	Product    string   `json:"product,omitempty"`
 	State      string   `json:"state"`
@@ -110,6 +111,20 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 		return nil, apperror.Wrap("DEVICE_CATALOG_SAVE_FAILED", "设备记忆目录保存失败", "device.catalog", false, err)
 	}
 	return devices, nil
+}
+
+func (s *Service) SetRemark(deviceID, remark string) (Device, error) {
+	if len([]rune(strings.TrimSpace(remark))) > 64 {
+		return Device{}, apperror.New("DEVICE_REMARK_TOO_LONG", "设备备注不能超过 64 个字符", "device.catalog", false)
+	}
+	updated, found, err := s.catalog.SetRemark(deviceID, strings.TrimSpace(remark))
+	if err != nil {
+		return Device{}, apperror.Wrap("DEVICE_CATALOG_SAVE_FAILED", "设备备注保存失败", "device.catalog", false, err)
+	}
+	if !found {
+		return Device{}, apperror.New("DEVICE_NOT_FOUND", "没有找到需要备注的设备", "device.catalog", false)
+	}
+	return updated, nil
 }
 
 // RememberAssignments migrates device IDs already persisted in Core accounts

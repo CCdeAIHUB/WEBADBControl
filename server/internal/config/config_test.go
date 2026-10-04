@@ -45,7 +45,7 @@ func TestLoadKeepsWebHTTPAndCoreQUICListenersIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "127.0.0.1:8080" {
+	if config.Address != "127.0.0.1:18087" {
 		t.Fatalf("Web HTTP address = %q", config.Address)
 	}
 	if config.CoreRemoteListen != "0.0.0.0:45921" {

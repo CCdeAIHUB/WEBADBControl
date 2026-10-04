@@ -67,6 +67,7 @@ func (c *Catalog) Merge(live []Device) ([]Device, error) {
 			if merged.HardwareID == "" {
 				merged.HardwareID = remembered.HardwareID
 			}
+			merged.Remark = remembered.Remark
 			merged.Aliases = appendUnique(merged.Aliases, remembered.ID)
 			merged.Aliases = appendUnique(merged.Aliases, remembered.Aliases...)
 			merged.Aliases = aliasesWithoutPrimary(merged.ID, merged.Aliases)
@@ -92,6 +93,26 @@ func (c *Catalog) Merge(live []Device) ([]Device, error) {
 		c.devices = stored
 	}
 	return cloneDevices(result), nil
+}
+
+func (c *Catalog) SetRemark(deviceID, remark string) (Device, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index, candidate := range c.devices {
+		if candidate.ID != deviceID && !containsDeviceID(candidate.Aliases, deviceID) && !EquivalentDeviceID(candidate.ID, deviceID) {
+			continue
+		}
+		updated := candidate
+		updated.Remark = remark
+		devices := cloneDevices(c.devices)
+		devices[index] = updated
+		if err := c.saveLocked(devices); err != nil {
+			return Device{}, false, err
+		}
+		c.devices = devices
+		return updated, true, nil
+	}
+	return Device{}, false, nil
 }
 
 func (c *Catalog) Remove(deviceID string) (Device, bool, error) {

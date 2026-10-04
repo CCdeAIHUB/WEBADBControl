@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Cable, Plus, RefreshCw, Search, Smartphone, Trash2, Wifi } from 'lucide-vue-next'
+import { Cable, Pencil, Plus, RefreshCw, Search, Smartphone, Trash2, Wifi, X } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
 import DeviceConnectionDialog from '@/components/device/DeviceConnectionDialog.vue'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 import StateMessage from '@/components/feedback/StateMessage.vue'
-import { toAppError } from '@/services/api'
+import { api, toAppError } from '@/services/api'
 import { useDevicesStore } from '@/stores/devices'
 import { useUiStore } from '@/stores/ui'
 import type { Device } from '@/types/api'
@@ -15,8 +15,11 @@ const query = ref('')
 const connectOpen = ref(false)
 const removing = ref<Device | null>(null)
 const removeBusy = ref(false)
+const editing = ref<Device | null>(null)
+const remark = ref('')
+const remarkBusy = ref(false)
 const ui = useUiStore()
-const visibleDevices = computed(() => devices.devices.filter((device) => `${device.name} ${device.model} ${device.id}`.toLowerCase().includes(query.value.toLowerCase())))
+const visibleDevices = computed(() => devices.devices.filter((device) => `${device.remark} ${device.name} ${device.model} ${device.id}`.toLowerCase().includes(query.value.toLowerCase())))
 
 onMounted(() => devices.refresh())
 
@@ -34,6 +37,23 @@ async function removeDevice() {
   }
 }
 
+function editRemark(device: Device) {
+  editing.value = device
+  remark.value = device.remark || ''
+}
+
+async function saveRemark() {
+  if (!editing.value || remarkBusy.value) return
+  remarkBusy.value = true
+  try {
+    await api(`/devices/${encodeURIComponent(editing.value.id)}`, { method: 'PATCH', body: JSON.stringify({ remark: remark.value }) })
+    editing.value = null
+    await devices.refresh()
+    ui.notify('设备备注已保存', '远程客户端刷新后会同步显示。', 'success')
+  } catch (error) { ui.failure(toAppError(error)) }
+  finally { remarkBusy.value = false }
+}
+
 </script>
 
 <template>
@@ -47,14 +67,22 @@ async function removeDevice() {
   <section v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
     <article v-for="device in visibleDevices" :key="device.id" class="card group relative overflow-hidden p-5 transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:hover:border-brand-500/25">
       <RouterLink :to="`/devices/${encodeURIComponent(device.id)}`" class="block rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500" :class="!['device','online'].includes(device.state) ? 'pointer-events-none' : ''" :aria-disabled="!['device','online'].includes(device.state)">
-        <div class="flex items-start"><div class="grid size-11 place-items-center rounded-xl bg-slate-100 text-slate-600 group-hover:bg-brand-50 group-hover:text-brand-700 dark:bg-white/6 dark:text-slate-300 dark:group-hover:bg-brand-500/10 dark:group-hover:text-brand-300"><Smartphone :size="21" /></div><div class="ml-auto mr-8 flex items-center gap-1.5 text-[11px] font-medium" :class="['device','online'].includes(device.state) ? 'text-brand-600' : 'text-slate-400'"><span class="size-1.5 rounded-full bg-current" />{{ ['device','online'].includes(device.state) ? '在线' : device.state }}</div></div>
-        <h2 class="mt-5 mb-1 truncate text-[15px] font-semibold text-slate-900 dark:text-white">{{ device.name }}</h2><p class="m-0 truncate font-mono text-[10px] text-slate-400">{{ device.id }}</p>
+        <div class="flex items-start"><div class="grid size-11 place-items-center rounded-xl bg-slate-100 text-slate-600 group-hover:bg-brand-50 group-hover:text-brand-700 dark:bg-white/6 dark:text-slate-300 dark:group-hover:bg-brand-500/10 dark:group-hover:text-brand-300"><Smartphone :size="21" /></div><div class="ml-auto mr-16 flex items-center gap-1.5 text-[11px] font-medium" :class="['device','online'].includes(device.state) ? 'text-brand-600' : 'text-slate-400'"><span class="size-1.5 rounded-full bg-current" />{{ ['device','online'].includes(device.state) ? '在线' : device.state }}</div></div>
+        <h2 class="mt-5 mb-1 truncate text-[15px] font-semibold text-slate-900 dark:text-white">{{ device.remark || device.name }}</h2><p v-if="device.remark" class="m-0 truncate text-xs text-slate-500 dark:text-slate-300">{{ device.name }}</p><p class="m-0 truncate font-mono text-[10px] text-slate-400">{{ device.id }}</p>
         <div class="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500 dark:border-white/7 dark:text-slate-400"><span class="flex items-center gap-1.5"><Wifi v-if="device.transport === 'wireless'" :size="14" /><Cable v-else :size="14" />{{ device.transport === 'wireless' ? '无线 ADB' : device.transport === 'companion' ? '伴侣应用' : 'USB 调试' }}</span><span>{{ device.model || device.product || 'Android' }}</span></div>
       </RouterLink>
+      <button class="icon-button absolute right-12 top-4 text-slate-400 hover:text-brand-600 dark:hover:text-brand-300" title="修改备注" aria-label="修改设备备注" @click="editRemark(device)"><Pencil :size="15" /></button>
       <button class="icon-button absolute right-4 top-4 text-slate-400 hover:text-red-600 dark:hover:text-red-300" title="删除设备" aria-label="删除设备" @click="removing = device"><Trash2 :size="16" /></button>
     </article>
   </section>
 
   <DeviceConnectionDialog :open="connectOpen" @close="connectOpen = false" />
   <ConfirmDialog :open="Boolean(removing)" title="删除设备" description="这会断开无线 ADB、清除设备记忆，并从所有远程账号中取消分配；不会删除手机中的任何数据、应用或文件。" confirm-text="确认删除" destructive @cancel="removing = null" @confirm="removeDevice" />
+  <div v-if="editing" class="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="remark-title" @click.self="editing = null">
+    <section class="card w-full max-w-md p-5 shadow-2xl">
+      <div class="flex items-center"><div><h2 id="remark-title" class="m-0 text-base font-semibold">设备备注名称</h2><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">备注优先展示，设备型号与硬件标识仍会保留。</p></div><button class="icon-button ml-auto" aria-label="关闭" @click="editing = null"><X :size="17" /></button></div>
+      <label class="mt-5 block text-xs font-medium">备注名称</label><input v-model="remark" maxlength="64" class="field mt-2" placeholder="例如：客厅折叠屏测试机" @keyup.enter="saveRemark" />
+      <div class="mt-5 flex justify-end gap-2"><button class="btn-secondary" @click="editing = null">取消</button><button class="btn-primary" :disabled="remarkBusy" @click="saveRemark">{{ remarkBusy ? '保存中…' : '保存备注' }}</button></div>
+    </section>
+  </div>
 </template>

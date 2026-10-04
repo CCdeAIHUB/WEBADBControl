@@ -46,11 +46,11 @@ COPY --from=adb-build /out/adb ./assets/adb/linux-x86_64/adb
 RUN mkdir -p data && \
     useradd --system --home /opt/webadbcontrol --shell /usr/sbin/nologin webadb && \
     chown -R webadb:webadb /opt/webadbcontrol/data
-ENV WEBADB_ADDRESS=0.0.0.0:8080 \
+ENV WEBADB_ADDRESS=0.0.0.0:18087 \
     WEBADB_CORE_BINARY=/opt/webadbcontrol/adbcontrol-core \
     WEBADB_DATA_DIR=/opt/webadbcontrol/data \
     WEBADB_WEB_DIR=/opt/webadbcontrol/web \
     HOME=/opt/webadbcontrol/data
-EXPOSE 8080
+EXPOSE 18087/tcp 45921/udp
 USER webadb
 ENTRYPOINT ["/opt/webadbcontrol/webadbcontrol"]

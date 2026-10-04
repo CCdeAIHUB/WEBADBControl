@@ -25,7 +25,7 @@ const reinstallError = ref<AppError | null>(null)
 const installing = ref(false)
 const retryAfterInstall = ref<null | (() => Promise<void>)>(null)
 
-const quicConnected = computed(() => permissions.value.length > 0)
+const quicConnected = computed(() => status.value?.quicTransport === 'connected')
 const adbCompatibilityMode = computed(() => status.value?.adbResponsive && capabilities.value.length > 0 && !quicConnected.value)
 const statusTone = computed(() => {
   if (quicConnected.value) return 'connected'
@@ -36,7 +36,7 @@ const statusTone = computed(() => {
 })
 const statusTitle = computed(() => {
   if (quicConnected.value) return '伴侣 QUIC 会话已连接'
-  if (adbCompatibilityMode.value) return '伴侣 ADB 兼容通道已连接'
+  if (adbCompatibilityMode.value) return 'ADB 配置/兼容通道可用，QUIC 实时会话未连接'
   if (status.value?.adbResponsive) return '伴侣 App ADB 可达'
   if (status.value?.installed === false) return '未安装伴侣应用'
   if (status.value?.updateRequired) return '伴侣版本需要升级'
@@ -44,7 +44,7 @@ const statusTitle = computed(() => {
 })
 const statusMessage = computed(() => {
   if (quicConnected.value) return '已通过原 Core/QUIC 同步能力目录，可以使用完整伴侣能力。'
-  if (adbCompatibilityMode.value) return 'QUIC 会话尚未建立；能力目录来自 Rust Core，操作将通过与 Windows 客户端一致的 ADB broadcast 通道执行并逐项校验权限。'
+  if (adbCompatibilityMode.value) return `${status.value?.quicMessage || 'QUIC 会话尚未建立。'} 当前能力目录来自 Rust Core，操作经 ADB broadcast 兼容通道执行；这不代表伴侣 QUIC 已连接。`
   if (status.value?.adbResponsive) return 'App 已安装且 broadcast 探测正常；如果能力目录为空，请在手机端确认 Companion 服务与权限。'
   if (status.value?.installed === false) return status.value.message || '使用伴侣能力前需要确认安装服务端内置 APK。'
   if (status.value?.updateRequired) return `设备版本 ${status.value.installedVersionName || status.value.installedVersionCode || '未知'}，服务端要求 ${status.value.requiredVersionName || status.value.requiredVersionCode}；需要确认后才能覆盖安装。`
@@ -193,6 +193,10 @@ onMounted(load)
           <span class="ml-1">{{ statusMessage }}</span>
           <span v-if="status?.installedVersionCode" class="ml-1 font-mono">v{{ status.installedVersionName || '?' }} ({{ status.installedVersionCode }})</span>
           <span v-if="companionError" class="ml-1">诊断：{{ companionError }}</span>
+        </div>
+        <div v-if="status?.installed" class="mt-3 grid gap-2 sm:grid-cols-2">
+          <div class="rounded-lg border border-slate-200 p-3 text-xs dark:border-white/10"><div class="font-semibold">ADB 配置/兼容通道</div><div class="mt-1" :class="status.adbTransport === 'connected' ? 'text-brand-700 dark:text-brand-300' : 'text-amber-700 dark:text-amber-300'">{{ status.adbTransport === 'connected' ? '已连接 · 可执行兼容能力' : '未连接' }}</div></div>
+          <div class="rounded-lg border border-slate-200 p-3 text-xs dark:border-white/10"><div class="font-semibold">伴侣 QUIC 实时会话</div><div class="mt-1" :class="status.quicTransport === 'connected' ? 'text-brand-700 dark:text-brand-300' : 'text-amber-700 dark:text-amber-300'">{{ status.quicTransport === 'connected' ? '已连接 · 实时能力与权限可同步' : `未连接${status.quicErrorCode ? ` · ${status.quicErrorCode}` : ''}` }}</div></div>
         </div>
       </div>
     </section>

@@ -27,7 +27,7 @@ type Config struct {
 func Load() (Config, error) {
 	dataDir := env("WEBADB_DATA_DIR", "./data")
 	config := Config{
-		Address:              env("WEBADB_ADDRESS", "127.0.0.1:8080"),
+		Address:              env("WEBADB_ADDRESS", "127.0.0.1:18087"),
 		CoreBinary:           env("WEBADB_CORE_BINARY", "./adbcontrol-core"),
 		CoreRemoteDataDir:    filepath.Join(dataDir, "remote"),
 		CoreRemoteListen:     persistedRemoteListen(filepath.Join(dataDir, "settings.json")),

@@ -85,3 +85,34 @@ func TestRememberAssignmentsSeedsOfflineCatalog(t *testing.T) {
 		t.Fatalf("expected assigned device to seed offline catalog, got %#v", devices)
 	}
 }
+
+func TestCatalogPersistsRemarkAcrossReconnectAndRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	catalog, err := OpenCatalog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceID := "adb-phone._adb-tls-connect._tcp"
+	if _, err := catalog.Merge([]Device{{ID: deviceID, Name: "SM-F926N", State: "device"}}); err != nil {
+		t.Fatal(err)
+	}
+	updated, ok, err := catalog.SetRemark(deviceID, "折叠屏测试机")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || updated.Remark != "折叠屏测试机" {
+		t.Fatalf("unexpected updated device: %#v", updated)
+	}
+
+	reopened, err := OpenCatalog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices, err := reopened.Merge([]Device{{ID: deviceID, Name: "SM-F926N", State: "device"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].Remark != "折叠屏测试机" {
+		t.Fatalf("remark not retained: %#v", devices)
+	}
+}

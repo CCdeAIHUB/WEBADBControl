@@ -6,8 +6,11 @@ services:
     environment:
       WEBADB_AUTH_TOKEN: ${WEBADB_AUTH_TOKEN:-}
       WEBADB_BEHIND_PROXY: "false"
+      WEBADB_ADDRESS: "0.0.0.0:18087"
+      ADBCONTROL_REMOTE_LISTEN: "0.0.0.0:45921"
     ports:
-      - "8080:8080"
+      - "18087:18087/tcp"
+      - "45921:45921/udp"
     volumes:
       - webadb-data:/opt/webadbcontrol/data
       - /dev/bus/usb:/dev/bus/usb

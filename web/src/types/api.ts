@@ -11,6 +11,7 @@ export interface AppError {
 export interface Device {
   id: string
   name: string
+  remark?: string
   model?: string
   product?: string
   state: 'device' | 'online' | 'offline' | 'unauthorized' | string
@@ -63,6 +64,10 @@ export interface CompanionStatus {
   requiredVersionCode?: number
   requiredVersionName?: string
   updateRequired: boolean
+  adbTransport: 'connected' | 'disconnected' | string
+  quicTransport: 'connected' | 'disconnected' | 'error' | string
+  quicErrorCode?: string
+  quicMessage: string
 }
 
 export interface CompanionUpgradeResult {
