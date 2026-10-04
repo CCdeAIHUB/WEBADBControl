@@ -39,6 +39,7 @@ type Service struct {
 	hardwareMonitors      *HardwareMonitorManager
 	screenshotStates      sync.Map
 	logger                *slog.Logger
+	catalog               *Catalog
 }
 
 type ServiceOption func(*Service)
@@ -48,7 +49,7 @@ func WithCompanionRequirement(requirement CompanionRequirement) ServiceOption {
 }
 
 func NewService(core coreipc.Caller, options ...ServiceOption) *Service {
-	service := &Service{core: core}
+	service := &Service{core: core, catalog: newMemoryCatalog()}
 	for _, option := range options {
 		option(service)
 	}
@@ -72,6 +73,15 @@ func (s *Service) EnableHardwareMonitorPersistence(path string) error {
 	return s.hardwareMonitors.EnablePersistence(path)
 }
 
+func (s *Service) EnableDeviceCatalogPersistence(path string) error {
+	catalog, err := OpenCatalog(path)
+	if err != nil {
+		return err
+	}
+	s.catalog = catalog
+	return nil
+}
+
 func (s *Service) SetLogger(logger *slog.Logger) { s.logger = logger }
 
 func (s *Service) Exec(ctx context.Context, args []string) (CommandOutput, error) {
@@ -91,6 +101,49 @@ func (s *Service) Exec(ctx context.Context, args []string) (CommandOutput, error
 }
 
 func (s *Service) List(ctx context.Context) ([]Device, error) {
+	live, err := s.listLive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	devices, err := s.catalog.Merge(live)
+	if err != nil {
+		return nil, apperror.Wrap("DEVICE_CATALOG_SAVE_FAILED", "设备记忆目录保存失败", "device.catalog", false, err)
+	}
+	return devices, nil
+}
+
+// RememberAssignments migrates device IDs already persisted in Core accounts
+// into the Web device catalog. This preserves deployments created before the
+// dedicated devices.json catalog existed.
+func (s *Service) RememberAssignments(devices []Device, assignedIDs []string) ([]Device, error) {
+	merged := cloneDevices(devices)
+	for _, assignedID := range assignedIDs {
+		if strings.TrimSpace(assignedID) == "" {
+			continue
+		}
+		known := false
+		for _, candidate := range merged {
+			if sameCatalogDevice(candidate, Device{ID: assignedID}) {
+				known = true
+				break
+			}
+		}
+		if !known {
+			transport := "usb"
+			if isWirelessADBIdentity(assignedID) {
+				transport = "wireless"
+			}
+			merged = append(merged, Device{ID: assignedID, Name: assignedID, State: "offline", Transport: transport})
+		}
+	}
+	remembered, err := s.catalog.Merge(merged)
+	if err != nil {
+		return nil, apperror.Wrap("DEVICE_CATALOG_SAVE_FAILED", "设备记忆目录保存失败", "device.catalog", false, err)
+	}
+	return remembered, nil
+}
+
+func (s *Service) listLive(ctx context.Context) ([]Device, error) {
 	output, err := s.Exec(ctx, []string{"devices", "-l"})
 	if err != nil {
 		return nil, err
@@ -99,7 +152,7 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 }
 
 func (s *Service) attachIdentityAndDedupe(ctx context.Context, devices []Device) []Device {
-	if len(devices) <= 1 {
+	if len(devices) == 0 {
 		return devices
 	}
 	identified := make([]Device, 0, len(devices))

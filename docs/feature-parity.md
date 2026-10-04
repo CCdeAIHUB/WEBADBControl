@@ -2,7 +2,7 @@
 
 | Windows 能力 | Web 落点 | 后端路径 |
 |---|---|---|
-| 设备发现、USB/无线连接 | 工作台、设备中心 | `GET /devices`、`POST /devices/connect` |
+| 设备发现、USB/无线连接、离线记忆与删除 | 工作台、设备中心 | `GET /devices`、`POST /devices/connect`、`POST /devices/{id}/remove`；`devices.json` 持久目录 |
 | 设备详情与状态 | 设备详情 / 概览 | `GET /devices/{id}/overview` |
 | 实时画面、设备声音与触控 | scrcpy H.264 视频流 + Raw PCM 设备音频（可显式启停、选择 15/30/60 FPS、连续触控；受限 OEM 自动使用伴侣手势） | WebSocket `/screen?fps=&protocol=3`、scrcpy 音视频/控制通道、`POST /actions` |
 | 返回、主页、多任务、电源、音量 | 屏幕控制栏 | 固定 ADB 参数白名单；OEM 拒绝 `INJECT_EVENTS` 时主页走 HOME Intent，返回/多任务/触摸走伴侣无障碍 |
@@ -17,7 +17,7 @@
 | 手动运行、暂停、继续、停止、运行记录 | 自动化任务 | 显式状态机 + `/automation/runs` |
 | AI 多模型、视觉输入、流式对话 | AI 助手 | 服务端 OpenAI 兼容流代理 |
 | 主题、刷新、模型配置 | 系统设置 | 服务端安全配置存储 |
-| 内置管理员、远程用户与设备授权 | 系统设置 / 远程用户与设备权限 | Web `/users/*` → Core `remote.admin.*` |
+| 内置管理员、远程用户与设备授权 | 系统设置 / 远程用户与设备权限 | Web `/users/*` → Core `remote.admin.*`；允许分配已记忆的离线设备 |
 | 默认管理员密码与首次登录强制改密 | 登录 / 修改密码 | `/session`、`/password` → Core `remote.admin.*` |
 | 加密远程控制监听 | 系统设置 / 远程控制服务 | Core QUIC/TLS 1.3 UDP，默认关闭，重启生效 |
 | 请求日志、关键操作审计、前端异常上报 | 系统日志 | `/logs`、`/logs/stats`、`/logs/client-error` |

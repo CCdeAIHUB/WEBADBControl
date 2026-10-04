@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/CCdeAIHUB/WEBADBControl/server/internal/device"
 )
 
 func (s *Server) createQRPairing(writer http.ResponseWriter, request *http.Request) {
@@ -69,14 +71,46 @@ func (s *Server) disconnectDevice(writer http.ResponseWriter, request *http.Requ
 }
 
 func (s *Server) removeDevice(writer http.ResponseWriter, request *http.Request) {
+	session, ok := sessionFromContext(request.Context())
+	if !ok {
+		writeError(writer, http.StatusUnauthorized, errUnauthorized())
+		return
+	}
 	result, err := s.devices.Remove(request.Context(), request.PathValue("id"))
 	if err != nil {
 		s.logger.Warn("device_remove_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "disconnected", result.Disconnected, "error", err)
 		writeError(writer, deviceConnectionStatus(err, http.StatusBadGateway), err)
 		return
 	}
+	users, err := s.auth.ListRemoteUsers(request.Context(), session)
+	if err != nil {
+		s.logger.Warn("device_assignment_cleanup_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "error", err)
+		writeAuthManagementError(writer, err)
+		return
+	}
+	for _, account := range users {
+		for _, assignedID := range account.Devices {
+			if !matchesRemovedDevice(assignedID, result.Forgotten) {
+				continue
+			}
+			if _, err := s.auth.SetRemoteUserDevice(request.Context(), session, account.Username, assignedID, false); err != nil {
+				s.logger.Warn("device_assignment_cleanup_failed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "username", account.Username, "error", err)
+				writeAuthManagementError(writer, err)
+				return
+			}
+		}
+	}
 	s.logger.Info("device_removed", "traceId", writer.Header().Get("X-Request-ID"), "deviceId", request.PathValue("id"), "disconnected", result.Disconnected)
 	writeData(writer, http.StatusOK, result)
+}
+
+func matchesRemovedDevice(assignedID string, removedIDs []string) bool {
+	for _, removedID := range removedIDs {
+		if device.EquivalentDeviceID(assignedID, removedID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) enableDeviceTCPIP(writer http.ResponseWriter, request *http.Request) {

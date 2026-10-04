@@ -93,26 +93,40 @@ func (s *Service) Disconnect(ctx context.Context, deviceID string) error {
 
 type RemovalResult struct {
 	Disconnected []string `json:"disconnected"`
+	Forgotten    []string `json:"forgotten"`
 }
 
 func (s *Service) Remove(ctx context.Context, deviceID string) (RemovalResult, error) {
-	devices, err := s.List(ctx)
+	liveDevices, err := s.listLive(ctx)
 	if err != nil {
 		return RemovalResult{}, err
 	}
-	connectionIDs := []string{deviceID}
-	for _, candidate := range devices {
-		if candidate.ID == deviceID || containsDeviceID(candidate.Aliases, deviceID) {
-			connectionIDs = appendUnique([]string{candidate.ID}, candidate.Aliases...)
-			break
+	connectionIDs := []string{}
+	for _, candidate := range liveDevices {
+		if !sameCatalogDevice(candidate, Device{ID: deviceID}) {
+			continue
+		}
+		for _, connectionID := range append([]string{candidate.ID}, candidate.Aliases...) {
+			if isWirelessADBIdentity(connectionID) {
+				connectionIDs = appendUnique(connectionIDs, connectionID)
+			}
 		}
 	}
 	result := RemovalResult{}
-	for _, connectionID := range appendUnique(nil, connectionIDs...) {
+	for _, connectionID := range connectionIDs {
 		if err := s.Disconnect(ctx, connectionID); err != nil {
 			return result, err
 		}
 		result.Disconnected = append(result.Disconnected, connectionID)
+	}
+	removed, found, err := s.catalog.Remove(deviceID)
+	if err != nil {
+		return result, apperror.Wrap("DEVICE_CATALOG_SAVE_FAILED", "设备记忆目录保存失败", "device.catalog", false, err)
+	}
+	if found {
+		result.Forgotten = appendUnique([]string{removed.ID}, removed.Aliases...)
+	} else {
+		result.Forgotten = []string{deviceID}
 	}
 	return result, nil
 }

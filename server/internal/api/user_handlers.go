@@ -103,7 +103,7 @@ func (s *Server) assignUserDevice(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		if !containsDevice(devices, body.DeviceID) {
-			writeError(writer, http.StatusConflict, apperror.New("REMOTE_AUTH_DEVICE_NOT_CONNECTED", "只能分配当前已连接的设备", "api.auth", true))
+			writeError(writer, http.StatusConflict, apperror.New("REMOTE_AUTH_DEVICE_NOT_REMEMBERED", "只能分配设备中心中已记忆的设备", "api.auth", true))
 			return
 		}
 	}

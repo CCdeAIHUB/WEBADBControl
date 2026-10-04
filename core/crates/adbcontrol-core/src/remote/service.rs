@@ -636,30 +636,17 @@ fn reconcile_remote_device_list(
 ) {
     let registered = std::mem::take(devices);
     let mut reconciled: Vec<Value> = Vec::new();
-    for current_id in current_adb_ids {
-        if !session_can_access_device(session, &current_id)
-            || reconciled.iter().any(|device| {
-                device
-                    .get("deviceId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|known| same_remote_device_identity(known, &current_id))
-            })
-        {
-            continue;
-        }
-
-        // A Companion registry entry may retain ADB's old local " (n)" suffix.
-        // Preserve its useful metadata, but expose only the current online ADB ID;
-        // an account assignment is authorization, not evidence that a device is online.
-        let mut entry = registered
+    for assigned_id in &session.devices {
+        let current_id = current_adb_ids
+            .iter()
+            .find(|current| same_remote_device_identity(assigned_id, current));
+        let registered_entry = registered
             .iter()
             .filter(|device| {
                 device
                     .get("deviceId")
                     .and_then(Value::as_str)
-                    .is_some_and(|registered_id| {
-                        same_remote_device_identity(registered_id, &current_id)
-                    })
+                    .is_some_and(|known| same_remote_device_identity(known, assigned_id))
             })
             .max_by_key(|device| {
                 matches!(
@@ -667,8 +654,29 @@ fn reconcile_remote_device_list(
                     Some("ready")
                 )
             })
-            .cloned()
-            .unwrap_or_else(|| json!({"connectionState": "adb"}));
+            .cloned();
+        let remembered_id = registered_entry
+            .as_ref()
+            .and_then(|device| device.get("deviceId"))
+            .and_then(Value::as_str);
+        let display_id = current_id
+            .map(String::as_str)
+            .or(remembered_id)
+            .unwrap_or(assigned_id)
+            .to_owned();
+        if reconciled.iter().any(|device| {
+            device
+                .get("deviceId")
+                .and_then(Value::as_str)
+                .is_some_and(|known| same_remote_device_identity(known, &display_id))
+        }) {
+            continue;
+        }
+
+        // Account assignments are the persistent device directory for remote
+        // users. Companion and ADB state enrich that directory; they do not
+        // remove a remembered card merely because the transport is offline.
+        let mut entry = registered_entry.unwrap_or_else(|| json!({}));
         let previous_id = entry
             .get("deviceId")
             .and_then(Value::as_str)
@@ -678,10 +686,26 @@ fn reconcile_remote_device_list(
             .get("name")
             .and_then(Value::as_str)
             .is_none_or(|name| name.is_empty() || name == previous_id);
-        entry["deviceId"] = Value::String(current_id.clone());
-        entry["adbState"] = Value::String(String::from("device"));
+        entry["deviceId"] = Value::String(display_id.clone());
+        entry["adbState"] = Value::String(if current_id.is_some() {
+            String::from("device")
+        } else {
+            String::from("offline")
+        });
+        if entry.get("connectionState").is_none()
+            || matches!(
+                entry.get("connectionState").and_then(Value::as_str),
+                Some("adb" | "disconnected" | "offline")
+            )
+        {
+            entry["connectionState"] = Value::String(if current_id.is_some() {
+                String::from("adb")
+            } else {
+                String::from("offline")
+            });
+        }
         if replace_name {
-            entry["name"] = Value::String(current_id);
+            entry["name"] = Value::String(display_id);
         }
         reconciled.push(entry);
     }
@@ -1052,7 +1076,7 @@ mod tests {
     #[test]
     fn current_adb_identity_replaces_stale_companion_entry_without_duplicate() {
         // 场景：伴侣注册表保留带“ (2)”的旧 ID，但 ADB 已用无后缀 ID 在线；
-        // 手机端只能收到一个使用当前 ID 的设备条目，不能保留离线旧卡片。
+        // 手机端只能收到一个使用当前 ID 的设备条目；ADB 离线后该记忆条目仍保留。
         let session = AuthenticatedSession {
             token: String::from("test-token"),
             username: String::from("operator"),
@@ -1079,6 +1103,8 @@ mod tests {
         assert_eq!(devices[0]["adbState"], "device");
 
         reconcile_remote_device_list(&mut devices, &session, Vec::new());
-        assert!(devices.is_empty());
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["deviceId"], current);
+        assert_eq!(devices[0]["adbState"], "offline");
     }
 }

@@ -66,3 +66,14 @@ func TestRemoteSessionAcceptsOnlyEquivalentMDNSCollisionAlias(t *testing.T) {
 		t.Fatal("unrelated mDNS device was authorized")
 	}
 }
+
+func TestRemovedDeviceMatchesPersistedMDNSAssignmentAlias(t *testing.T) {
+	assigned := "adb-R3CR70SJHHR-2VyQ5v (2)._adb-tls-connect._tcp"
+	removed := []string{"adb-R3CR70SJHHR-2VyQ5v._adb-tls-connect._tcp"}
+	if !matchesRemovedDevice(assigned, removed) {
+		t.Fatal("expected removed current identity to match persisted collision alias")
+	}
+	if matchesRemovedDevice("adb-other._adb-tls-connect._tcp", removed) {
+		t.Fatal("unrelated assignment matched removed device")
+	}
+}

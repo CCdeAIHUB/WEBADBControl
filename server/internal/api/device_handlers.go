@@ -24,7 +24,7 @@ import (
 var packagePattern = regexp.MustCompile(`^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$`)
 
 func (s *Server) overview(writer http.ResponseWriter, request *http.Request) {
-	devices, err := s.devices.List(request.Context())
+	devices, err := s.listRememberedDevices(request)
 	if err != nil {
 		writeError(writer, http.StatusServiceUnavailable, err)
 		return
@@ -43,12 +43,33 @@ func (s *Server) overview(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) listDevices(writer http.ResponseWriter, request *http.Request) {
-	devices, err := s.devices.List(request.Context())
+	devices, err := s.listRememberedDevices(request)
 	if err != nil {
 		writeError(writer, http.StatusServiceUnavailable, err)
 		return
 	}
 	writeData(writer, http.StatusOK, devices)
+}
+
+func (s *Server) listRememberedDevices(request *http.Request) ([]device.Device, error) {
+	devices, err := s.devices.List(request.Context())
+	if err != nil {
+		return nil, err
+	}
+	session, ok := sessionFromContext(request.Context())
+	if !ok {
+		return devices, nil
+	}
+	users, err := s.auth.ListRemoteUsers(request.Context(), session)
+	if err != nil {
+		s.logger.Warn("device_catalog_assignment_migration_failed", "deviceCount", len(devices), "error", err)
+		return devices, nil
+	}
+	assignedIDs := make([]string, 0)
+	for _, account := range users {
+		assignedIDs = append(assignedIDs, account.Devices...)
+	}
+	return s.devices.RememberAssignments(devices, assignedIDs)
 }
 
 func (s *Server) connectDevice(writer http.ResponseWriter, request *http.Request) {

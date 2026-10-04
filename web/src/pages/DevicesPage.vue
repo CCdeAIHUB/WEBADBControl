@@ -25,7 +25,7 @@ async function removeDevice() {
   removeBusy.value = true
   try {
     await devices.remove(removing.value)
-    ui.notify('设备已移除', '已断开该设备的全部 ADB 连接，不会删除手机数据。', 'success')
+    ui.notify('设备已删除', '已清除设备记忆及远程用户分配，不会删除手机数据。', 'success')
     removing.value = null
   } catch (error) {
     ui.failure(toAppError(error))
@@ -43,10 +43,10 @@ async function removeDevice() {
   <div class="mb-4 flex max-w-md items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 dark:border-white/9 dark:bg-white/4"><Search :size="16" class="text-slate-400" /><input v-model="query" class="h-10 min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" placeholder="搜索名称、型号或设备序列号" /></div>
   <StateMessage v-if="devices.status === 'loading'" state="loading" title="正在发现设备" />
   <StateMessage v-else-if="devices.status === 'error'" state="error" :error="devices.error" @retry="devices.refresh()" />
-  <StateMessage v-else-if="!devices.devices.length" state="empty" title="还没有连接设备" description="使用 USB 调试连接设备，或输入无线 ADB 地址建立连接。" />
+  <StateMessage v-else-if="!devices.devices.length" state="empty" title="还没有记忆设备" description="使用 USB 调试连接设备，或输入无线 ADB 地址建立连接；连接后设备会保留在设备中心。" />
   <section v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
     <article v-for="device in visibleDevices" :key="device.id" class="card group relative overflow-hidden p-5 transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:hover:border-brand-500/25">
-      <RouterLink :to="`/devices/${encodeURIComponent(device.id)}`" class="block rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+      <RouterLink :to="`/devices/${encodeURIComponent(device.id)}`" class="block rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500" :class="!['device','online'].includes(device.state) ? 'pointer-events-none' : ''" :aria-disabled="!['device','online'].includes(device.state)">
         <div class="flex items-start"><div class="grid size-11 place-items-center rounded-xl bg-slate-100 text-slate-600 group-hover:bg-brand-50 group-hover:text-brand-700 dark:bg-white/6 dark:text-slate-300 dark:group-hover:bg-brand-500/10 dark:group-hover:text-brand-300"><Smartphone :size="21" /></div><div class="ml-auto mr-8 flex items-center gap-1.5 text-[11px] font-medium" :class="['device','online'].includes(device.state) ? 'text-brand-600' : 'text-slate-400'"><span class="size-1.5 rounded-full bg-current" />{{ ['device','online'].includes(device.state) ? '在线' : device.state }}</div></div>
         <h2 class="mt-5 mb-1 truncate text-[15px] font-semibold text-slate-900 dark:text-white">{{ device.name }}</h2><p class="m-0 truncate font-mono text-[10px] text-slate-400">{{ device.id }}</p>
         <div class="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500 dark:border-white/7 dark:text-slate-400"><span class="flex items-center gap-1.5"><Wifi v-if="device.transport === 'wireless'" :size="14" /><Cable v-else :size="14" />{{ device.transport === 'wireless' ? '无线 ADB' : device.transport === 'companion' ? '伴侣应用' : 'USB 调试' }}</span><span>{{ device.model || device.product || 'Android' }}</span></div>
@@ -56,5 +56,5 @@ async function removeDevice() {
   </section>
 
   <DeviceConnectionDialog :open="connectOpen" @close="connectOpen = false" />
-  <ConfirmDialog :open="Boolean(removing)" title="删除设备" description="这会断开该设备的全部 ADB 连接并从设备中心移除，不会删除手机中的任何数据、应用或文件。" confirm-text="确认删除" destructive @cancel="removing = null" @confirm="removeDevice" />
+  <ConfirmDialog :open="Boolean(removing)" title="删除设备" description="这会断开无线 ADB、清除设备记忆，并从所有远程账号中取消分配；不会删除手机中的任何数据、应用或文件。" confirm-text="确认删除" destructive @cancel="removing = null" @confirm="removeDevice" />
 </template>

@@ -71,13 +71,23 @@ async function assign(account: RemoteAccount, deviceId: string) {
   if (busyAction.value) return
   busyAction.value = `device:${account.username}:${deviceId}`
   try {
-    await assignRemoteDevice(account.username, deviceId, !account.devices.includes(deviceId))
+    const existing = assignedDeviceId(account, deviceId)
+    await assignRemoteDevice(account.username, existing || deviceId, !existing)
     await load()
   } catch (error) {
     ui.failure(toAppError(error))
   } finally {
     busyAction.value = ''
   }
+}
+
+function normalizedDeviceId(deviceId: string) {
+  return deviceId.replace(/ \(\d+\)(?=\._adb-tls-connect\._tcp$)/, '')
+}
+
+function assignedDeviceId(account: RemoteAccount, deviceId: string) {
+  const normalized = normalizedDeviceId(deviceId)
+  return account.devices.find((assigned) => normalizedDeviceId(assigned) === normalized)
 }
 
 async function remove() {
@@ -139,19 +149,20 @@ onMounted(load)
         </div>
 
         <div class="mt-4">
-          <div class="mb-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">允许访问的在线设备</div>
+          <div class="mb-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">允许访问的已记忆设备</div>
           <div class="flex flex-wrap gap-2">
             <button
               v-for="device in devices"
               :key="device.id"
               class="btn-secondary !h-8 !text-xs"
-              :class="account.devices.includes(device.id) ? '!border-brand-500 !bg-brand-50 !text-brand-700 dark:!bg-brand-500/10 dark:!text-brand-300' : ''"
+              :class="assignedDeviceId(account, device.id) ? '!border-brand-500 !bg-brand-50 !text-brand-700 dark:!bg-brand-500/10 dark:!text-brand-300' : ''"
               :disabled="!!busyAction"
               @click="assign(account, device.id)"
             >
-              {{ account.devices.includes(device.id) ? '✓ ' : '' }}{{ device.name || device.id }}
+              {{ assignedDeviceId(account, device.id) ? '✓ ' : '' }}{{ device.name || device.id }}
+              <span class="opacity-60">· {{ ['device', 'online'].includes(device.state) ? '在线' : '离线' }}</span>
             </button>
-            <span v-if="!devices.length" class="text-xs text-slate-400">暂无在线设备</span>
+            <span v-if="!devices.length" class="text-xs text-slate-400">暂无已记忆设备</span>
           </div>
         </div>
 

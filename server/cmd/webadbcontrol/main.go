@@ -62,6 +62,10 @@ func main() {
 		VersionName: applicationConfig.CompanionVersionName,
 	}))
 	devices.SetLogger(logger)
+	if err := devices.EnableDeviceCatalogPersistence(filepath.Join(applicationConfig.DataDir, "devices.json")); err != nil {
+		logger.Error("device_catalog_recovery_failed", "error", err)
+		os.Exit(1)
+	}
 	if err := devices.EnableHardwareMonitorPersistence(filepath.Join(applicationConfig.DataDir, "hardware-monitor-tasks.json")); err != nil {
 		logger.Error("hardware_monitor_recovery_failed", "error", err)
 		os.Exit(1)
