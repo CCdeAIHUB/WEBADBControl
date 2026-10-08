@@ -16,13 +16,14 @@ pub use ingress::CompanionIngress;
 pub use listener::{CompanionQuicListener, IngressBackedQuicListener};
 pub use media_store::{CompanionMediaStore, StoredMediaChunk};
 pub use protocol::{
-    quic_protocol_descriptor, validate_quic_envelope, CompanionCommandRequest, CompanionHello,
-    QuicEnvelope, QuicMessageKind, COMPANION_PROTOCOL, COMPANION_PROTOCOL_VERSION,
+    quic_protocol_descriptor, validate_quic_envelope, CompanionCommandRequest,
+    CompanionConnectionInfo, CompanionHello, QuicEnvelope, QuicMessageKind, COMPANION_ALPN,
+    COMPANION_PROTOCOL, COMPANION_PROTOCOL_VERSION,
 };
 #[cfg(feature = "quinn-transport")]
 pub use quic_identity::CoreQuicIdentity;
 #[cfg(feature = "quinn-transport")]
-pub use quinn_transport::QuinnCompanionServer;
+pub use quinn_transport::{LiveCompanionTransport, QuinnCompanionServer};
 pub use registry::{
     sample_android_companion_device, CompanionDevice, CompanionRegistry, ConnectionState,
 };

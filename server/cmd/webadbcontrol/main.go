@@ -45,8 +45,9 @@ func main() {
 		processContext,
 		applicationConfig.CoreBinary,
 		map[string]string{
-			"ADBCONTROL_REMOTE_DATA_DIR": applicationConfig.CoreRemoteDataDir,
-			"ADBCONTROL_REMOTE_LISTEN":   applicationConfig.CoreRemoteListen,
+			"ADBCONTROL_REMOTE_DATA_DIR":  applicationConfig.CoreRemoteDataDir,
+			"ADBCONTROL_REMOTE_LISTEN":    applicationConfig.CoreRemoteListen,
+			"ADBCONTROL_COMPANION_LISTEN": applicationConfig.CoreCompanionListen,
 		},
 		io.MultiWriter(os.Stderr, coreDiagnosticWriter),
 	)
@@ -60,7 +61,7 @@ func main() {
 		APKPath:     applicationConfig.CompanionAPK,
 		VersionCode: applicationConfig.CompanionVersionCode,
 		VersionName: applicationConfig.CompanionVersionName,
-	}))
+	}), device.WithCompanionPublicHost(applicationConfig.CompanionPublicHost))
 	devices.SetLogger(logger)
 	if err := devices.EnableDeviceCatalogPersistence(filepath.Join(applicationConfig.DataDir, "devices.json")); err != nil {
 		logger.Error("device_catalog_recovery_failed", "error", err)

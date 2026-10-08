@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -30,22 +32,30 @@ pub struct CompanionDevice {
 
 #[derive(Debug, Clone, Default)]
 pub struct CompanionRegistry {
-    devices: Vec<CompanionDevice>,
+    devices: Arc<RwLock<Vec<CompanionDevice>>>,
 }
 
 impl CompanionRegistry {
     pub fn new(devices: Vec<CompanionDevice>) -> Self {
-        Self { devices }
+        Self {
+            devices: Arc::new(RwLock::new(devices)),
+        }
     }
 
-    pub fn list_devices(&self) -> &[CompanionDevice] {
-        &self.devices
-    }
-
-    pub fn get_device(&self, device_id: &str) -> Result<&CompanionDevice, AppError> {
+    pub fn list_devices(&self) -> Vec<CompanionDevice> {
         self.devices
+            .read()
+            .expect("companion registry read lock should not be poisoned")
+            .clone()
+    }
+
+    pub fn get_device(&self, device_id: &str) -> Result<CompanionDevice, AppError> {
+        self.devices
+            .read()
+            .expect("companion registry read lock should not be poisoned")
             .iter()
             .find(|device| device.device_id == device_id)
+            .cloned()
             .ok_or_else(|| {
                 AppError::new(
                     "COMPANION_DEVICE_NOT_CONNECTED",
@@ -57,6 +67,28 @@ impl CompanionRegistry {
                     "Pair the Android companion app with Core before invoking capabilities.",
                 )
             })
+    }
+
+    pub fn upsert(&self, device: CompanionDevice) {
+        let mut devices = self
+            .devices
+            .write()
+            .expect("companion registry write lock should not be poisoned");
+        if let Some(current) = devices
+            .iter_mut()
+            .find(|current| current.device_id == device.device_id)
+        {
+            *current = device;
+        } else {
+            devices.push(device);
+        }
+    }
+
+    pub fn remove(&self, device_id: &str) {
+        self.devices
+            .write()
+            .expect("companion registry write lock should not be poisoned")
+            .retain(|device| device.device_id != device_id);
     }
 }
 
@@ -113,5 +145,19 @@ mod tests {
             .permission_states
             .iter()
             .any(|state| state.capability_id == "android.camera.stream"));
+    }
+
+    #[test]
+    fn cloned_registry_observes_live_session_updates() {
+        // 场景：QUIC 网络线程注册设备后，stdio IPC 线程持有的 registry clone 必须立即看到同一设备。
+        let network_registry = CompanionRegistry::default();
+        let ipc_registry = network_registry.clone();
+
+        network_registry.upsert(sample_android_companion_device());
+
+        assert_eq!(ipc_registry.list_devices().len(), 1);
+        assert!(ipc_registry.get_device("android-companion-sample").is_ok());
+        network_registry.remove("android-companion-sample");
+        assert!(ipc_registry.get_device("android-companion-sample").is_err());
     }
 }

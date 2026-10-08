@@ -9,7 +9,8 @@ use crate::{
     capability::android_companion_capability_catalog,
     companion::{
         quic_protocol_descriptor, CompanionCommandDispatch, CompanionCommandRouter,
-        CompanionRegistry, CompanionSessionManager, DisconnectedCompanionCommandRouter,
+        CompanionConnectionInfo, CompanionRegistry, CompanionSessionManager,
+        DisconnectedCompanionCommandRouter,
     },
     error::AppError,
     keepalive::{AdbKeepAliveConfig, AdbKeepAliveHandle},
@@ -130,6 +131,7 @@ pub struct CoreService<R: AdbRunner, Q: CompanionCommandRouter = DisconnectedCom
     manifest: AdbManifest,
     companion_registry: CompanionRegistry,
     companion_router: Q,
+    companion_connection_info: Option<CompanionConnectionInfo>,
     keepalive: Option<AdbKeepAliveHandle>,
     wireless_pairing: WirelessPairingManager,
     local_admin: Option<LocalAdminService>,
@@ -143,6 +145,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             manifest,
             companion_registry: CompanionRegistry::default(),
             companion_router: DisconnectedCompanionCommandRouter,
+            companion_connection_info: None,
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
@@ -160,6 +163,7 @@ impl<R: AdbRunner> CoreService<R, DisconnectedCompanionCommandRouter> {
             manifest,
             companion_registry,
             companion_router: DisconnectedCompanionCommandRouter,
+            companion_connection_info: None,
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
@@ -180,6 +184,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             manifest,
             companion_registry,
             companion_router,
+            companion_connection_info: None,
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
@@ -198,6 +203,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             manifest,
             companion_registry: CompanionRegistry::new(session_manager.devices()),
             companion_router,
+            companion_connection_info: None,
             keepalive: None,
             wireless_pairing: WirelessPairingManager::default(),
             local_admin: None,
@@ -215,6 +221,11 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
     /// host processes. Remote QUIC clients cannot access this stdio boundary.
     pub fn with_local_admin(mut self, local_admin: LocalAdminService) -> Self {
         self.local_admin = Some(local_admin);
+        self
+    }
+
+    pub fn with_companion_connection_info(mut self, info: CompanionConnectionInfo) -> Self {
+        self.companion_connection_info = Some(info);
         self
     }
 
@@ -287,6 +298,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
             "adb.wifi.qr.pair" => self.handle_adb_wifi_qr_pair(request),
             "adb.wifi.qr.cancel" => self.handle_adb_wifi_qr_cancel(request),
             "companion.protocol.info" => self.handle_companion_protocol_info(request.id),
+            "companion.connection.info" => self.handle_companion_connection_info(request.id),
             "capability.list" => self.handle_capability_list(request.id),
             "device.list" => self.handle_device_list(request.id),
             "device.getCapabilities" => self.handle_device_get_capabilities(request),
@@ -512,6 +524,22 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
         IpcResponse::success(id, quic_protocol_descriptor())
     }
 
+    fn handle_companion_connection_info(&self, id: String) -> IpcResponse {
+        match &self.companion_connection_info {
+            Some(info) => response_from_serializable(id, info, "companion.connection"),
+            None => IpcResponse::failure(
+                Some(id),
+                AppError::new(
+                    "COMPANION_QUIC_LISTENER_DISABLED",
+                    "Core Companion QUIC listener is not configured.",
+                    "companion.connection",
+                    true,
+                )
+                .with_suggestion("Set ADBCONTROL_COMPANION_LISTEN and restart Core."),
+            ),
+        }
+    }
+
     fn handle_capability_list(&self, id: String) -> IpcResponse {
         response_from_serializable(
             id,
@@ -523,7 +551,7 @@ impl<R: AdbRunner, Q: CompanionCommandRouter> CoreService<R, Q> {
     fn handle_device_list(&self, id: String) -> IpcResponse {
         response_from_serializable(
             id,
-            self.companion_registry.list_devices(),
+            &self.companion_registry.list_devices(),
             "companion.registry",
         )
     }
@@ -1117,6 +1145,29 @@ mod tests {
             response.result.expect("result is required")["protocol"],
             "adbcontrol-companion-quic"
         );
+    }
+
+    #[test]
+    fn companion_connection_info_exposes_only_public_bootstrap_material() {
+        // 场景：Web 通过本机 IPC 引导手机时，只能获得监听地址、公钥证书和指纹，绝不能返回私钥。
+        let service = service_with_recording_runner(Arc::new(Mutex::new(Vec::new())))
+            .with_companion_connection_info(CompanionConnectionInfo {
+                listen_address: String::from("0.0.0.0:45922"),
+                server_name: String::from("adbcontrol-core"),
+                certificate_der_base64: String::from("AQIDBA=="),
+                certificate_fingerprint_sha256: "a".repeat(64),
+            });
+
+        let encoded = service.handle_json_line(
+            r#"{"id":"connection-info","method":"companion.connection.info","params":{}}"#,
+        );
+        let response: IpcResponse = serde_json::from_str(&encoded).expect("response is JSON");
+        let result = response.result.expect("connection info is present");
+
+        assert!(response.ok);
+        assert_eq!(result["listenAddress"], "0.0.0.0:45922");
+        assert_eq!(result["serverName"], "adbcontrol-core");
+        assert!(result.get("privateKey").is_none());
     }
 
     #[test]

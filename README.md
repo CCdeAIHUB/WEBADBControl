@@ -63,7 +63,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-打开 `http://服务器地址:18087`。远程管理 QUIC 固定使用 `45921/UDP`。容器需要访问 `/dev/bus/usb` 才能管理 USB 设备；无线 ADB 不需要 USB 映射。
+打开 `http://服务器地址:18087`。远程管理 QUIC 固定使用 `45921/UDP`，Android 伴侣主动连接 Core 的独立 QUIC 通道固定使用 `45922/UDP`。容器需要访问 `/dev/bus/usb` 才能管理 USB 设备；无线 ADB 不需要 USB 映射。多网卡或容器无法自动选择局域网地址时，设置 `WEBADB_COMPANION_PUBLIC_HOST` 为手机可访问的服务器 IP。
 
 ## 主流 Linux 发行版
 

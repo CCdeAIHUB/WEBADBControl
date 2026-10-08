@@ -50,7 +50,8 @@ ENV WEBADB_ADDRESS=0.0.0.0:18087 \
     WEBADB_CORE_BINARY=/opt/webadbcontrol/adbcontrol-core \
     WEBADB_DATA_DIR=/opt/webadbcontrol/data \
     WEBADB_WEB_DIR=/opt/webadbcontrol/web \
+    ADBCONTROL_COMPANION_LISTEN=0.0.0.0:45922 \
     HOME=/opt/webadbcontrol/data
-EXPOSE 18087/tcp 45921/udp
+EXPOSE 18087/tcp 45921/udp 45922/udp
 USER webadb
 ENTRYPOINT ["/opt/webadbcontrol/webadbcontrol"]

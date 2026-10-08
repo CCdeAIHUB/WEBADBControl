@@ -1,9 +1,9 @@
 use std::io::{BufRead, Write};
 
-use crate::{error::AppError, protocol::CoreService, AdbRunner};
+use crate::{error::AppError, protocol::CoreService, AdbRunner, CompanionCommandRouter};
 
-pub fn serve_json_lines<R, W, A>(
-    service: &CoreService<A>,
+pub fn serve_json_lines<R, W, A, Q>(
+    service: &CoreService<A, Q>,
     reader: R,
     mut writer: W,
 ) -> Result<(), AppError>
@@ -11,6 +11,7 @@ where
     R: BufRead,
     W: Write,
     A: AdbRunner,
+    Q: CompanionCommandRouter,
 {
     for line in reader.lines() {
         let line = line.map_err(|error| {

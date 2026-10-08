@@ -23,18 +23,18 @@ pub use capability::{
     CapabilityPermissionState, CapabilityProvider, CapabilitySensitivity, CapabilityTransport,
 };
 pub use companion::trust::{CompanionTrustStore, PairingChallenge, PairingRequest, TrustedDevice};
-#[cfg(feature = "quinn-transport")]
-pub use companion::QuinnCompanionServer;
 pub use companion::{
     build_command_request_envelope, quic_protocol_descriptor, sample_android_companion_device,
     validate_quic_envelope, CompanionCommandDispatch, CompanionCommandResponse,
-    CompanionCommandRouter, CompanionCommandStatus, CompanionCommandTransport, CompanionDevice,
-    CompanionIngress, CompanionQuicListener, CompanionRegistry, CompanionSession,
-    CompanionSessionManager, ConnectionState, DisconnectedCompanionCommandRouter,
-    InMemoryCompanionCommandRouter, InMemoryCompanionSession, IngressBackedQuicListener,
-    QuicEnvelope, QuicMessageKind, TransportCompanionCommandRouter, COMPANION_PROTOCOL,
-    COMPANION_PROTOCOL_VERSION,
+    CompanionCommandRouter, CompanionCommandStatus, CompanionCommandTransport,
+    CompanionConnectionInfo, CompanionDevice, CompanionIngress, CompanionQuicListener,
+    CompanionRegistry, CompanionSession, CompanionSessionManager, ConnectionState,
+    DisconnectedCompanionCommandRouter, InMemoryCompanionCommandRouter, InMemoryCompanionSession,
+    IngressBackedQuicListener, QuicEnvelope, QuicMessageKind, TransportCompanionCommandRouter,
+    COMPANION_PROTOCOL, COMPANION_PROTOCOL_VERSION,
 };
+#[cfg(feature = "quinn-transport")]
+pub use companion::{LiveCompanionTransport, QuinnCompanionServer};
 pub use error::AppError;
 pub use keepalive::{
     keepalive_check, spawn_adb_keepalive, AdbKeepAliveConfig, AdbKeepAliveHandle,

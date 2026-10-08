@@ -36,6 +36,8 @@ type Service struct {
 	core                  coreipc.Caller
 	companionRequirement  CompanionRequirement
 	companionUpgradeLocks sync.Map
+	companionPublicHost   string
+	companionProvisioned  sync.Map
 	inputTransports       sync.Map
 	hardwareMonitors      *HardwareMonitorManager
 	screenshotStates      sync.Map
@@ -47,6 +49,10 @@ type ServiceOption func(*Service)
 
 func WithCompanionRequirement(requirement CompanionRequirement) ServiceOption {
 	return func(service *Service) { service.companionRequirement = requirement }
+}
+
+func WithCompanionPublicHost(host string) ServiceOption {
+	return func(service *Service) { service.companionPublicHost = strings.TrimSpace(host) }
 }
 
 func NewService(core coreipc.Caller, options ...ServiceOption) *Service {

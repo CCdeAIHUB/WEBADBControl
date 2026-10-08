@@ -90,6 +90,11 @@ func (s *Service) CompanionCapabilities(ctx context.Context, deviceID string) (C
 	if !isCompanionSessionUnavailable(err) {
 		return CompanionCollectionAccess{}, err
 	}
+	if s.connectCompanionQUICIfPossible(ctx, deviceID) {
+		if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil {
+			return CompanionCollectionAccess{Items: capabilities, Transport: CompanionTransportQUIC}, nil
+		}
+	}
 
 	// The static catalog remains owned by Rust Core. ADB broadcast is the same
 	// compatibility path used by the Windows client while QUIC is not ready.
@@ -111,6 +116,11 @@ func (s *Service) CompanionPermissions(ctx context.Context, deviceID string) (Co
 	if !isCompanionSessionUnavailable(err) {
 		return CompanionCollectionAccess{}, err
 	}
+	if s.connectCompanionQUICIfPossible(ctx, deviceID) {
+		if err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions); err == nil {
+			return CompanionCollectionAccess{Items: permissions, Transport: CompanionTransportQUIC}, nil
+		}
+	}
 	// ADB broadcast validates permissions per operation and returns a structured
 	// permission error. It cannot publish the full QUIC permission matrix.
 	return CompanionCollectionAccess{Items: []map[string]any{}, Transport: CompanionTransportADBBroadcast}, nil
@@ -129,6 +139,13 @@ func (s *Service) InvokeCompanionCapability(ctx context.Context, deviceID, capab
 	}
 	if !isCompanionSessionUnavailable(err) {
 		return nil, CompanionTransportQUIC, err
+	}
+	if s.connectCompanionQUICIfPossible(ctx, deviceID) {
+		if err := s.core.Call(ctx, "device.invoke", map[string]any{
+			"deviceId": deviceID, "capabilityId": capabilityID, "operation": operation, "args": args,
+		}, &result); err == nil {
+			return result, CompanionTransportQUIC, nil
+		}
 	}
 
 	payload, err := s.executeCompanionCommand(ctx, deviceID, capabilityID, operation, args)
@@ -219,6 +236,23 @@ func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (Compani
 		status.State = "ready"
 	} else if isCompanionSessionUnavailable(err) {
 		status.QUICErrorCode = companionErrorCode(err)
+		configured, provisionErr := s.provisionCompanionQUICIfDue(ctx, deviceID)
+		if provisionErr != nil {
+			status.QUICMessage = "伴侣 ADB 通道可用，但 QUIC 配置下发失败：" + provisionErr.Error()
+			if s.logger != nil {
+				s.logger.Warn("companion_quic_provision_failed", "deviceId", deviceID, "error", provisionErr)
+			}
+		} else if configured {
+			status.State = "quic-connecting"
+			status.QUICTransport = "connecting"
+			status.QUICMessage = "已向伴侣下发固定证书和 Core 地址，正在等待 QUIC 握手。"
+			if s.waitForCompanionQUIC(ctx, deviceID) {
+				status.State = "ready"
+				status.QUICTransport = "connected"
+				status.QUICErrorCode = ""
+				status.QUICMessage = "伴侣 QUIC 实时会话已建立，可同步实时能力与权限。"
+			}
+		}
 	} else {
 		status.QUICTransport = "error"
 		status.QUICErrorCode = companionErrorCode(err)

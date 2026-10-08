@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    capability::{Capability, CapabilityPermissionState},
+    capability::{android_companion_capability_catalog, Capability, CapabilityPermissionState},
     error::AppError,
 };
 
@@ -45,6 +45,27 @@ impl CompanionSession {
 #[derive(Debug, Default, Clone)]
 pub struct CompanionSessionManager {
     sessions: HashMap<String, CompanionSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnouncedCapability {
+    id: String,
+    #[serde(default)]
+    operations: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnouncedPermissionState {
+    capability_id: String,
+    granted: bool,
+    #[serde(default)]
+    missing_permissions: Vec<String>,
+    #[serde(default)]
+    missing_special_grants: Vec<String>,
+    #[serde(default, alias = "userConsentRequired", alias = "requiresUserConsent")]
+    user_consent_required: bool,
 }
 
 impl CompanionSessionManager {
@@ -158,12 +179,49 @@ impl CompanionSessionManager {
 
     fn handle_capability_list(&mut self, envelope: QuicEnvelope) -> Result<QuicEnvelope, AppError> {
         let device_id = require_device_id(&envelope)?;
-        let capabilities: Vec<Capability> = parse_required_payload_field(
+        let announcements: Vec<AnnouncedCapability> = parse_required_payload_field(
             &envelope.payload,
             "capabilities",
             "COMPANION_CAPABILITY_SCHEMA_INVALID",
             "Companion capabilityList payload is invalid.",
         )?;
+        let catalog = android_companion_capability_catalog();
+        let mut capabilities = Vec::with_capacity(announcements.len());
+        for announcement in announcements {
+            let capability = catalog
+                .iter()
+                .find(|candidate| candidate.id == announcement.id)
+                .ok_or_else(|| {
+                    AppError::new(
+                        "COMPANION_CAPABILITY_UNKNOWN",
+                        format!(
+                            "Companion announced an unknown capability: {}.",
+                            announcement.id
+                        ),
+                        "companion.session",
+                        false,
+                    )
+                })?;
+            if announcement
+                .operations
+                .iter()
+                .any(|operation| !capability.operations.contains(operation))
+            {
+                return Err(AppError::new(
+                    "COMPANION_CAPABILITY_OPERATION_INVALID",
+                    format!(
+                        "Companion capability {} announced an operation outside the Core catalog.",
+                        announcement.id
+                    ),
+                    "companion.session",
+                    false,
+                ));
+            }
+            // Core remains the authority for descriptions, transport and
+            // permission requirements. Android only announces what this build
+            // implements, so a compromised client cannot widen its privileges.
+            capabilities.push(capability.clone());
+        }
 
         let session = self.sessions.get_mut(&device_id).ok_or_else(|| {
             AppError::new(
@@ -194,12 +252,46 @@ impl CompanionSessionManager {
         envelope: QuicEnvelope,
     ) -> Result<QuicEnvelope, AppError> {
         let device_id = require_device_id(&envelope)?;
-        let states: Vec<CapabilityPermissionState> = parse_required_payload_field(
+        let announcements: Vec<AnnouncedPermissionState> = parse_required_payload_field(
             &envelope.payload,
             "states",
             "COMPANION_PERMISSION_STATE_INVALID",
             "Companion permissionState payload is invalid.",
         )?;
+        let catalog = android_companion_capability_catalog();
+        let mut states = Vec::with_capacity(announcements.len());
+        for announcement in announcements {
+            let capability = catalog
+                .iter()
+                .find(|candidate| candidate.id == announcement.capability_id)
+                .ok_or_else(|| {
+                    AppError::new(
+                        "COMPANION_PERMISSION_CAPABILITY_UNKNOWN",
+                        format!(
+                            "Companion reported permission state for an unknown capability: {}.",
+                            announcement.capability_id
+                        ),
+                        "companion.session",
+                        false,
+                    )
+                })?;
+            let special_grants = capability
+                .permission
+                .special_permissions
+                .iter()
+                .filter(|grant| !announcement.missing_special_grants.contains(grant))
+                .cloned()
+                .collect();
+            states.push(CapabilityPermissionState {
+                capability_id: announcement.capability_id,
+                granted: announcement.granted,
+                android_permissions: capability.permission.android_permissions.clone(),
+                missing_permissions: announcement.missing_permissions,
+                special_grants,
+                missing_special_grants: announcement.missing_special_grants,
+                user_consent_required: announcement.user_consent_required,
+            });
+        }
 
         let session = self.sessions.get_mut(&device_id).ok_or_else(|| {
             AppError::new(
@@ -443,6 +535,49 @@ mod tests {
         assert_eq!(session.connection_state, ConnectionState::Ready);
         assert_eq!(session.capabilities.len(), capabilities.len());
         assert_eq!(manager.devices()[0].device_id, "device-1");
+    }
+
+    #[test]
+    fn android_compact_state_payload_reaches_ready() {
+        // 场景：已发布 Android 伴侣只上报精简能力/权限字段；Core 必须用权威目录补全模型并进入 ready。
+        let mut manager = CompanionSessionManager::default();
+        manager.handle_envelope(hello_envelope("device-1")).unwrap();
+        let capability = android_companion_capability_catalog()
+            .into_iter()
+            .find(|item| item.id == "android.volume.media")
+            .unwrap();
+        let mut capabilities = capability_list_envelope("device-1", Vec::new());
+        capabilities.payload = json!({
+            "capabilities": [{
+                "id": capability.id,
+                "title": capability.title,
+                "androidPermissions": [],
+                "specialGrants": [],
+                "sensitivity": "medium",
+                "operations": capability.operations,
+                "requiresUserConsent": false
+            }]
+        });
+        manager.handle_envelope(capabilities).unwrap();
+        let mut permissions = permission_state_envelope("device-1", Vec::new());
+        permissions.payload = json!({
+            "states": [{
+                "capabilityId": "android.volume.media",
+                "granted": true,
+                "missingPermissions": [],
+                "missingSpecialGrants": [],
+                "requiresUserConsent": false
+            }]
+        });
+        manager.handle_envelope(permissions).unwrap();
+
+        let session = manager.get_session("device-1").unwrap();
+        assert_eq!(session.connection_state, ConnectionState::Ready);
+        assert_eq!(
+            session.capabilities[0].provider,
+            crate::capability::CapabilityProvider::AndroidCompanion
+        );
+        assert!(session.permission_states[0].granted);
     }
 
     fn hello_envelope(device_id: &str) -> QuicEnvelope {

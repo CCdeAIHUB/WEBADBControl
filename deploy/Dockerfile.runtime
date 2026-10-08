@@ -23,8 +23,9 @@ ENV WEBADB_ADDRESS=0.0.0.0:18087 \
     WEBADB_COMPANION_APK=/opt/webadbcontrol/companion.apk \
     WEBADB_COMPANION_VERSION_CODE=13 \
     WEBADB_COMPANION_VERSION_NAME=0.13.0 \
+    ADBCONTROL_COMPANION_LISTEN=0.0.0.0:45922 \
     HOME=/opt/webadbcontrol/data
 
-EXPOSE 18087/tcp 45921/udp
+EXPOSE 18087/tcp 45921/udp 45922/udp
 USER webadb
 ENTRYPOINT ["/opt/webadbcontrol/webadbcontrol"]

@@ -8,9 +8,12 @@ services:
       WEBADB_BEHIND_PROXY: "false"
       WEBADB_ADDRESS: "0.0.0.0:18087"
       ADBCONTROL_REMOTE_LISTEN: "0.0.0.0:45921"
+      ADBCONTROL_COMPANION_LISTEN: "0.0.0.0:45922"
+      WEBADB_COMPANION_PUBLIC_HOST: ${WEBADB_COMPANION_PUBLIC_HOST:-}
     ports:
       - "18087:18087/tcp"
       - "45921:45921/udp"
+      - "45922:45922/udp"
     volumes:
       - webadb-data:/opt/webadbcontrol/data
       - /dev/bus/usb:/dev/bus/usb

@@ -5,6 +5,16 @@ use crate::error::AppError;
 
 pub const COMPANION_PROTOCOL: &str = "adbcontrol-companion-quic";
 pub const COMPANION_PROTOCOL_VERSION: u16 = 1;
+pub const COMPANION_ALPN: &[u8] = b"adbcontrol-companion/1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionConnectionInfo {
+    pub listen_address: String,
+    pub server_name: String,
+    pub certificate_der_base64: String,
+    pub certificate_fingerprint_sha256: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

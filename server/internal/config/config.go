@@ -15,6 +15,8 @@ type Config struct {
 	CoreBinary           string
 	CoreRemoteDataDir    string
 	CoreRemoteListen     string
+	CoreCompanionListen  string
+	CompanionPublicHost  string
 	DataDir              string
 	WebDir               string
 	AuthToken            string
@@ -31,6 +33,8 @@ func Load() (Config, error) {
 		CoreBinary:           env("WEBADB_CORE_BINARY", "./adbcontrol-core"),
 		CoreRemoteDataDir:    filepath.Join(dataDir, "remote"),
 		CoreRemoteListen:     persistedRemoteListen(filepath.Join(dataDir, "settings.json")),
+		CoreCompanionListen:  env("ADBCONTROL_COMPANION_LISTEN", "0.0.0.0:45922"),
+		CompanionPublicHost:  strings.TrimSpace(os.Getenv("WEBADB_COMPANION_PUBLIC_HOST")),
 		DataDir:              dataDir,
 		WebDir:               env("WEBADB_WEB_DIR", "./web"),
 		AuthToken:            os.Getenv("WEBADB_AUTH_TOKEN"),
@@ -41,6 +45,12 @@ func Load() (Config, error) {
 	}
 	if _, _, err := net.SplitHostPort(config.Address); err != nil {
 		return Config{}, fmt.Errorf("invalid WEBADB_ADDRESS: %w", err)
+	}
+	if _, _, err := net.SplitHostPort(config.CoreCompanionListen); err != nil {
+		return Config{}, fmt.Errorf("invalid ADBCONTROL_COMPANION_LISTEN: %w", err)
+	}
+	if config.CompanionPublicHost != "" && net.ParseIP(config.CompanionPublicHost) == nil {
+		return Config{}, fmt.Errorf("invalid WEBADB_COMPANION_PUBLIC_HOST: must be an IP address")
 	}
 	for _, path := range []string{config.DataDir, filepath.Join(config.DataDir, "uploads"), config.CoreRemoteDataDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {

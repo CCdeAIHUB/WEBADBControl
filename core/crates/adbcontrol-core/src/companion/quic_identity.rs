@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
+use super::protocol::COMPANION_ALPN;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreQuicIdentity {
     pub cert_der: Vec<u8>,
@@ -111,6 +113,37 @@ impl CoreQuicIdentity {
             .with_cause(error)
         })
     }
+
+    pub fn companion_server_config(&self) -> Result<quinn::ServerConfig, AppError> {
+        let mut tls = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(self.cert_der.clone())],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.private_key_der.clone())),
+            )
+            .map_err(|error| {
+                AppError::new(
+                    "COMPANION_QUIC_SERVER_CONFIG_FAILED",
+                    "Core failed to build Quinn ServerConfig from identity.",
+                    "companion.quic_identity",
+                    false,
+                )
+                .with_cause(error)
+            })?;
+        tls.alpn_protocols = vec![COMPANION_ALPN.to_vec()];
+        let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls).map_err(|error| {
+            AppError::new(
+                "COMPANION_QUIC_SERVER_CONFIG_FAILED",
+                "Core failed to enable the Companion QUIC ALPN.",
+                "companion.quic_identity",
+                false,
+            )
+            .with_cause(error)
+        })?;
+        Ok(quinn::ServerConfig::with_crypto(std::sync::Arc::new(
+            crypto,
+        )))
+    }
 }
 
 fn write_file(path: impl AsRef<Path>, bytes: &[u8], error_code: &str) -> Result<(), AppError> {
@@ -150,6 +183,7 @@ mod tests {
             CoreQuicIdentity::generate_self_signed(vec![String::from("localhost")]).unwrap();
         assert_eq!(identity.certificate_fingerprint_sha256.len(), 64);
         identity.server_config().unwrap();
+        identity.companion_server_config().unwrap();
     }
 
     #[test]

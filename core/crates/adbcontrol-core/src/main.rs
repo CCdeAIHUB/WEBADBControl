@@ -52,8 +52,33 @@ fn main() {
             }
         };
 
+    #[cfg(feature = "quinn-transport")]
+    let (companion_registry, companion_router, companion_connection_info) =
+        match start_companion_control_if_configured(&remote_data_dir) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+
+    #[cfg(feature = "quinn-transport")]
+    let mut service = CoreService::new_with_companion_registry_and_router(
+        ProcessAdbRunner,
+        manifest,
+        companion_registry,
+        companion_router,
+    )
+    .with_local_admin(LocalAdminService::new(Arc::clone(&remote_accounts)));
+
+    #[cfg(not(feature = "quinn-transport"))]
     let mut service = CoreService::new(ProcessAdbRunner, manifest)
         .with_local_admin(LocalAdminService::new(Arc::clone(&remote_accounts)));
+
+    #[cfg(feature = "quinn-transport")]
+    if let Some(info) = companion_connection_info {
+        service = service.with_companion_connection_info(info);
+    }
     if let Some(handle) = keepalive {
         service = service.with_keepalive(handle);
     }
@@ -108,11 +133,71 @@ fn remote_data_dir() -> std::path::PathBuf {
 }
 
 #[cfg(feature = "quinn-transport")]
-fn start_remote_control_if_configured(
-    core: Arc<CoreService<ProcessAdbRunner>>,
+fn start_companion_control_if_configured(
+    data_dir: &std::path::Path,
+) -> Result<
+    (
+        adbcontrol_core::CompanionRegistry,
+        adbcontrol_core::TransportCompanionCommandRouter<adbcontrol_core::LiveCompanionTransport>,
+        Option<adbcontrol_core::CompanionConnectionInfo>,
+    ),
+    adbcontrol_core::AppError,
+> {
+    use std::{env, net::SocketAddr};
+
+    use adbcontrol_core::{
+        companion::CoreQuicIdentity, CompanionConnectionInfo, CompanionRegistry,
+        LiveCompanionTransport, QuinnCompanionServer, TransportCompanionCommandRouter,
+    };
+    use base64::Engine;
+
+    let registry = CompanionRegistry::default();
+    let transport = LiveCompanionTransport::new(registry.clone());
+    let router = TransportCompanionCommandRouter::new(transport.clone());
+    let listen_value = match env::var("ADBCONTROL_COMPANION_LISTEN") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return Ok((registry, router, None)),
+    };
+    let listen_addr: SocketAddr = listen_value.parse().map_err(|error| {
+        adbcontrol_core::AppError::new(
+            "COMPANION_QUIC_LISTEN_ADDRESS_INVALID",
+            "ADBCONTROL_COMPANION_LISTEN must be an IP socket address such as 0.0.0.0:45922.",
+            "companion.startup",
+            false,
+        )
+        .with_cause(error)
+    })?;
+    let server_name = String::from("adbcontrol-core");
+    let identity = CoreQuicIdentity::load_or_generate(
+        data_dir.join("companion.cert.der"),
+        data_dir.join("companion.key.der"),
+        vec![server_name.clone(), String::from("localhost")],
+    )?;
+    let actual_addr =
+        QuinnCompanionServer::spawn(listen_addr, identity.companion_server_config()?, transport)?;
+    let info = CompanionConnectionInfo {
+        listen_address: actual_addr.to_string(),
+        server_name,
+        certificate_der_base64: base64::engine::general_purpose::STANDARD
+            .encode(&identity.cert_der),
+        certificate_fingerprint_sha256: identity.certificate_fingerprint_sha256.clone(),
+    };
+    eprintln!(
+        "Companion QUIC listening on {actual_addr}; certificate SHA-256: {}",
+        identity.certificate_fingerprint_sha256
+    );
+    Ok((registry, router, Some(info)))
+}
+
+#[cfg(feature = "quinn-transport")]
+fn start_remote_control_if_configured<Q>(
+    core: Arc<CoreService<ProcessAdbRunner, Q>>,
     accounts: Arc<RemoteAccountManager>,
     data_dir: std::path::PathBuf,
-) -> Result<(), adbcontrol_core::AppError> {
+) -> Result<(), adbcontrol_core::AppError>
+where
+    Q: adbcontrol_core::CompanionCommandRouter + 'static,
+{
     use std::{env, net::SocketAddr};
 
     use adbcontrol_core::{
