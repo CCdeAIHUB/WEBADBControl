@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, Cpu, Database, Download, HardDrive, RefreshCw, Thermometer } from 'lucide-vue-next'
+import { Activity, Cpu, Database, Download, HardDrive, RefreshCw, Thermometer, X } from 'lucide-vue-next'
 import { api, toAppError } from '@/services/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -32,6 +32,8 @@ const ui = useUiStore()
 const samples = ref<Snapshot[]>([])
 const loading = ref(false)
 const monitor = ref<MonitorStatus | null>(null)
+const monitorOpen = ref(false)
+const selectedMetrics = ref(['cpu', 'memory', 'storage', 'temperature'])
 const canvas = ref<HTMLCanvasElement>()
 let timer = 0
 let resizeObserver: ResizeObserver | undefined
@@ -68,7 +70,7 @@ async function toggleRecording() {
   try {
     const operation = monitor.value?.running ? 'stop' : 'start'
     monitor.value = await api<MonitorStatus>(`/devices/${encodeURIComponent(props.deviceId)}/hardware-monitor/${operation}`, {
-      method: 'POST', body: JSON.stringify({ metrics: ['cpu', 'memory', 'storage', 'temperature'] }),
+      method: 'POST', body: JSON.stringify({ metrics: selectedMetrics.value }),
     })
     if (monitor.value.samples.length) samples.value = monitor.value.samples.slice(-60)
   } catch (error) { ui.failure(toAppError(error)) }
@@ -134,6 +136,7 @@ onBeforeUnmount(() => { stopPolling(); resizeObserver?.disconnect() })
 
 <template>
   <div class="space-y-4">
+    <section class="card flex flex-wrap items-center gap-3 p-5"><div><h3 class="section-title m-0">分类硬件信息</h3><p class="mt-1 text-xs text-slate-500 dark:text-slate-300">处理器、内存与存储、电池与温度分类展示；采样与记录在独立监控窗口中配置。</p></div><button class="btn-primary ml-auto" @click="monitorOpen = true"><Activity :size="16"/>打开硬件监控</button></section>
     <section v-if="monitor?.running" class="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
       <span class="relative flex size-3"><span class="absolute inline-flex size-full animate-ping rounded-full bg-amber-500 opacity-60"/><span class="relative inline-flex size-3 rounded-full bg-amber-500"/></span>
       <div><p class="text-sm font-semibold">后台性能记录正在运行</p><p class="text-xs opacity-80">每 {{ Math.round(monitor.intervalMillis / 1000) }} 秒串行采样；离开本页后仍会继续，当前已记录 {{ monitor.sampleCount }} 条，只有手动停止才会结束。</p></div>
@@ -147,7 +150,7 @@ onBeforeUnmount(() => { stopPolling(); resizeObserver?.disconnect() })
         { label:'最高温度', value:`${maximumTemperature.toFixed(1)} °C`, icon:Thermometer, color:'text-amber-600 bg-amber-50 dark:bg-amber-500/10' },
       ]" :key="metric.label" class="card p-4"><div class="flex items-center"><div class="grid size-8 place-items-center rounded-lg" :class="metric.color"><component :is="metric.icon" :size="16" /></div><span class="ml-2 text-xs text-slate-500">{{ metric.label }}</span></div><div class="mt-4 text-xl font-semibold">{{ metric.value }}</div></div>
     </section>
-    <section class="card overflow-hidden"><div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/7"><Activity :size="17" class="mr-1 text-brand-600" /><div><h3 class="section-title m-0">实时性能趋势</h3><p class="mt-1 text-xs text-slate-400">后台串行采样 · 不排队 · 绿色为内存占用 · 橙色为最高温度</p></div><button class="btn-primary ml-auto" :disabled="loading" @click="toggleRecording">{{ monitor?.running ? '停止记录' : '开始后台记录' }}</button><button class="btn-secondary" :disabled="!samples.length" @click="exportCSV"><Download :size="15" />导出 CSV</button><button class="icon-button" title="立即刷新" :disabled="monitor?.running" @click="collectOnce"><RefreshCw :size="16" :class="loading ? 'animate-spin' : ''" /></button></div><div v-if="loading && !samples.length" class="grid h-72 place-items-center text-sm text-slate-400"><RefreshCw :size="20" class="mb-2 animate-spin"/>正在读取硬件信息…</div><div v-else class="h-72 p-5"><canvas ref="canvas" class="size-full" aria-label="设备性能趋势图" /></div><p v-if="monitor?.lastError" class="border-t border-rose-200 bg-rose-50 px-5 py-3 text-xs text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300">最近一次采样失败：{{ monitor.lastError }}（{{ monitor.lastErrorCode }}），后台任务会在下一周期继续。</p></section>
     <section v-if="latest" class="grid gap-4 xl:grid-cols-2"><div class="card p-5"><h3 class="section-title m-0">处理器核心</h3><div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><div v-for="(frequency,index) in latest.cpuFrequenciesKHz" :key="index" class="rounded-lg bg-slate-50 p-3 dark:bg-white/4"><div class="text-[10px] text-slate-400">CPU {{ index }}</div><div class="mt-1 text-sm font-semibold">{{ (frequency/1_000_000).toFixed(2) }} GHz</div></div><div v-if="!latest.cpuFrequenciesKHz.length" class="text-xs text-slate-400">设备未公开核心频率</div></div></div><div class="card p-5"><h3 class="section-title m-0">资源明细</h3><dl class="mt-4 space-y-3 text-xs"><div class="flex"><dt class="text-slate-500">可用内存</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.memoryAvailableKb) }}</dd></div><div class="flex"><dt class="text-slate-500">总内存</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.memoryTotalKb) }}</dd></div><div class="flex"><dt class="text-slate-500">数据分区已用</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.storageUsedKb) }} / {{ formatStorage(latest.storageTotalKb) }}</dd></div><div class="flex"><dt class="text-slate-500">运行时长</dt><dd class="ml-auto font-medium">{{ (latest.uptimeSeconds/3600).toFixed(1) }} 小时</dd></div></dl></div></section>
+    <div v-if="monitorOpen" class="fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm" @click.self="monitorOpen = false"><section class="card flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden shadow-2xl"><div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/7"><Activity :size="17" class="mr-1 text-brand-600" /><div><h3 class="section-title m-0">硬件监控</h3><p class="mt-1 text-xs text-slate-400">关闭窗口不会停止 Core 后台记录任务</p></div><button class="btn-primary ml-auto" :disabled="loading || !selectedMetrics.length" @click="toggleRecording">{{ monitor?.running ? '停止记录' : '开始后台记录' }}</button><button class="btn-secondary" :disabled="!samples.length" @click="exportCSV"><Download :size="15" />导出 CSV</button><button class="icon-button" title="关闭" @click="monitorOpen=false"><X :size="17"/></button></div><div class="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-3 dark:border-white/7"><label v-for="metric in [{id:'cpu',label:'CPU'},{id:'memory',label:'内存'},{id:'storage',label:'存储'},{id:'temperature',label:'温度'}]" :key="metric.id" class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs dark:border-white/10"><input v-model="selectedMetrics" type="checkbox" :value="metric.id" :disabled="monitor?.running" class="accent-brand-600"/>{{ metric.label }}</label></div><div class="min-h-0 flex-1 overflow-auto"><div v-if="loading && !samples.length" class="grid h-72 place-items-center text-sm text-slate-400"><RefreshCw :size="20" class="mb-2 animate-spin"/>正在读取硬件信息…</div><div v-else class="h-96 p-5"><canvas ref="canvas" class="size-full" aria-label="设备性能趋势图" /></div><p v-if="monitor?.lastError" class="border-t border-rose-200 bg-rose-50 px-5 py-3 text-xs text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300">最近一次采样失败：{{ monitor.lastError }}（{{ monitor.lastErrorCode }}），后台任务会在下一周期继续。</p></div></section></div>
   </div>
 </template>

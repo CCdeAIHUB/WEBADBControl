@@ -12,6 +12,7 @@ import { synchronizeTheme } from '@/services/theme'
 import { useDevicesStore } from '@/stores/devices'
 import { useUiStore } from '@/stores/ui'
 import type { AppSettings } from '@/types/api'
+import AssistantPage from '@/pages/AssistantPage.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,7 +69,6 @@ const navigation = [
 	{ to: '/', label: '工作台', icon: LayoutDashboard },
 	{ to: '/devices', label: '设备中心', icon: Smartphone },
 	{ to: '/automation', label: '自动化任务', icon: Workflow },
-	{ to: '/assistant', label: 'AI 助手', icon: Bot },
 	{ to: '/logs', label: '系统日志', icon: ClipboardList },
 	{ to: '/settings', label: '系统设置', icon: Settings },
 ]
@@ -105,6 +105,9 @@ const navigation = [
           <span>{{ item.label }}</span>
           <ChevronLeft v-if="route.path === item.to || (item.to !== '/' && route.path.startsWith(item.to))" :size="14" class="ml-auto rotate-180" />
         </RouterLink>
+        <button class="group flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white" @click="ui.assistantOpen = true; ui.sidebarOpen = false">
+          <Bot :size="18" :stroke-width="1.9" /><span>AI 助手</span><ChevronLeft :size="14" class="ml-auto rotate-180" />
+        </button>
       </nav>
 
       <div class="p-3">
@@ -132,5 +135,10 @@ const navigation = [
       </header>
       <main class="mx-auto w-full max-w-[1560px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7"><slot /></main>
     </div>
+    <div v-if="ui.assistantOpen" class="fixed inset-0 z-[70] bg-slate-950/35 backdrop-blur-[2px]" @click.self="ui.assistantOpen = false" />
+    <aside class="fixed inset-y-0 right-0 z-[80] flex w-full max-w-[620px] flex-col border-l border-slate-200 bg-[#f4f7f5] shadow-2xl transition-transform duration-200 dark:border-white/10 dark:bg-[#0b100e]" :class="ui.assistantOpen ? 'translate-x-0' : 'translate-x-full'" aria-label="AI 助手侧边栏">
+      <div class="flex h-15 shrink-0 items-center border-b border-slate-200 px-4 dark:border-white/8"><Bot :size="18" class="text-brand-600"/><div class="ml-2"><div class="text-sm font-semibold">AI 设备助手</div><div class="text-[10px] text-slate-400">侧边栏工作区</div></div><button class="icon-button ml-auto" aria-label="关闭 AI 助手" @click="ui.assistantOpen = false"><X :size="18"/></button></div>
+      <div class="min-h-0 flex-1 overflow-hidden p-3"><AssistantPage embedded /></div>
+    </aside>
   </div>
 </template>

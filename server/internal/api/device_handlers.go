@@ -256,6 +256,12 @@ func (s *Server) remoteCompanionStatus(writer http.ResponseWriter, request *http
 	}
 }
 
+func (s *Server) remotePackages(writer http.ResponseWriter, request *http.Request) {
+	if s.requireRemoteDevice(writer, request) {
+		s.packages(writer, request)
+	}
+}
+
 func (s *Server) remoteCapabilities(writer http.ResponseWriter, request *http.Request) {
 	if s.requireRemoteDevice(writer, request) {
 		s.capabilities(writer, request)

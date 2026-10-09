@@ -9,7 +9,7 @@ export interface Toast {
 }
 
 export const useUiStore = defineStore('ui', {
-  state: () => ({ sidebarOpen: false, toasts: [] as Toast[], sequence: 0 }),
+  state: () => ({ sidebarOpen: false, assistantOpen: false, toasts: [] as Toast[], sequence: 0 }),
   actions: {
     notify(title: string, message: string, tone: Toast['tone'] = 'info') {
       const id = ++this.sequence

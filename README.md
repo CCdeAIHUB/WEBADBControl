@@ -1,5 +1,7 @@
 # ADBControl Web
 
+远程控制 Android 客户端调试包随 Web 服务发布：`/downloads/adbcontrol-remote-0.3.8.apk`。客户端通过独立远程 QUIC 端口认证，并通过同一 Web 服务读取投屏、伴侣状态、硬件监控与应用名称/图标。
+
 ADBControl Web 是 ADBControl 的独立 Web 版本：保留原 Rust Core、Android Companion 与 scrcpy 能力，以 Go 提供安全网络服务，并使用 Vue 3、TypeScript 和 Tailwind CSS 构建现代化中文管理界面。
 
 ## 架构
