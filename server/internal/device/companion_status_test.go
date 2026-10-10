@@ -19,6 +19,21 @@ type companionFallbackCaller struct {
 	catAttempts int
 }
 
+type companionEmptyCatalogCaller struct {
+	fallback companionFallbackCaller
+}
+
+func (c *companionEmptyCatalogCaller) Call(ctx context.Context, method string, params any, target any) error {
+	switch method {
+	case "device.getCapabilities", "device.getPermissionState":
+		// 场景：Core 已接受查询，但 Companion 会话尚未同步目录。空集合不能被当成已连接。
+		*(target.(*[]map[string]any)) = []map[string]any{}
+		return nil
+	default:
+		return c.fallback.Call(ctx, method, params, target)
+	}
+}
+
 func (c *companionFallbackCaller) Call(_ context.Context, method string, params any, target any) error {
 	switch method {
 	case "device.getCapabilities", "device.getPermissionState", "device.invoke":
@@ -118,6 +133,28 @@ func TestCompanionCapabilitiesFallBackToCoreCatalogWithoutQuic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if access.Transport != CompanionTransportADBBroadcast || len(access.Items) != 1 {
+		t.Fatalf("unexpected access: %#v", access)
+	}
+}
+
+func TestCompanionCapabilitiesFallBackWhenQuicCatalogIsEmpty(t *testing.T) {
+	// 场景：真实设备可能对 QUIC 能力查询返回成功但空目录；Web 必须展示 Core 静态能力目录，而非“尚未同步”。
+	access, err := NewService(&companionEmptyCatalogCaller{}).CompanionCapabilities(context.Background(), "wireless-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.Transport != CompanionTransportADBBroadcast || len(access.Items) != 1 {
+		t.Fatalf("unexpected access: %#v", access)
+	}
+}
+
+func TestCompanionPermissionsDoNotReportQuicWhenCapabilityCatalogIsEmpty(t *testing.T) {
+	// 场景：权限查询和能力目录均为空时，通道仍处于 ADB 兼容态，不能误报为 QUIC 已同步。
+	access, err := NewService(&companionEmptyCatalogCaller{}).CompanionPermissions(context.Background(), "wireless-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.Transport != CompanionTransportADBBroadcast || len(access.Items) != 0 {
 		t.Fatalf("unexpected access: %#v", access)
 	}
 }

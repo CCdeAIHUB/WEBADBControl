@@ -131,9 +131,9 @@ func (s *Service) waitForCompanionQUIC(ctx context.Context, deviceID string) boo
 	defer ticker.Stop()
 	for {
 		var capabilities []map[string]any
-		if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil {
+		if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil && companionCapabilityCatalogReady(capabilities) {
 			return true
-		} else if !isCompanionSessionUnavailable(err) {
+		} else if err != nil && !isCompanionSessionUnavailable(err) {
 			return false
 		}
 		select {
@@ -144,6 +144,21 @@ func (s *Service) waitForCompanionQUIC(ctx context.Context, deviceID string) boo
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Service) companionQUICCatalogReady(ctx context.Context, deviceID string) bool {
+	var capabilities []map[string]any
+	if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err != nil {
+		return false
+	}
+	return companionCapabilityCatalogReady(capabilities)
+}
+
+func companionCapabilityCatalogReady(capabilities []map[string]any) bool {
+	// A successful RPC with an empty catalog is an intermediate Core state, not
+	// proof of a usable Companion session. Treating it as connected previously
+	// made the UI hide the Core-owned fallback catalog indefinitely.
+	return len(capabilities) > 0
 }
 
 func resolveCompanionPublicHost(

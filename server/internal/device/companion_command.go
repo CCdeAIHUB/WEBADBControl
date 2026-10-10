@@ -84,14 +84,15 @@ func (s *Service) CompanionCapabilities(ctx context.Context, deviceID string) (C
 	}
 	var capabilities []map[string]any
 	err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities)
-	if err == nil {
+	if err == nil && companionCapabilityCatalogReady(capabilities) {
 		return CompanionCollectionAccess{Items: capabilities, Transport: CompanionTransportQUIC}, nil
 	}
-	if !isCompanionSessionUnavailable(err) {
+	if err != nil && !isCompanionSessionUnavailable(err) {
 		return CompanionCollectionAccess{}, err
 	}
 	if s.connectCompanionQUICIfPossible(ctx, deviceID) {
-		if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil {
+		capabilities = nil
+		if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil && companionCapabilityCatalogReady(capabilities) {
 			return CompanionCollectionAccess{Items: capabilities, Transport: CompanionTransportQUIC}, nil
 		}
 	}
@@ -110,14 +111,15 @@ func (s *Service) CompanionPermissions(ctx context.Context, deviceID string) (Co
 	}
 	var permissions []map[string]any
 	err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions)
-	if err == nil {
+	if err == nil && s.companionQUICCatalogReady(ctx, deviceID) {
 		return CompanionCollectionAccess{Items: permissions, Transport: CompanionTransportQUIC}, nil
 	}
-	if !isCompanionSessionUnavailable(err) {
+	if err != nil && !isCompanionSessionUnavailable(err) {
 		return CompanionCollectionAccess{}, err
 	}
 	if s.connectCompanionQUICIfPossible(ctx, deviceID) {
-		if err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions); err == nil {
+		permissions = nil
+		if err := s.core.Call(ctx, "device.getPermissionState", map[string]any{"deviceId": deviceID}, &permissions); err == nil && s.companionQUICCatalogReady(ctx, deviceID) {
 			return CompanionCollectionAccess{Items: permissions, Transport: CompanionTransportQUIC}, nil
 		}
 	}
@@ -230,12 +232,14 @@ func (s *Service) CompanionStatus(ctx context.Context, deviceID string) (Compani
 	status.State = "adb-responsive"
 	status.Message = "伴侣应用已安装，ADB 配置/兼容通道可用。"
 	var capabilities []map[string]any
-	if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil {
+	if err := s.core.Call(ctx, "device.getCapabilities", map[string]any{"deviceId": deviceID}, &capabilities); err == nil && companionCapabilityCatalogReady(capabilities) {
 		status.QUICTransport = "connected"
 		status.QUICMessage = "伴侣 QUIC 实时会话已建立，可同步实时能力与权限。"
 		status.State = "ready"
-	} else if isCompanionSessionUnavailable(err) {
-		status.QUICErrorCode = companionErrorCode(err)
+	} else if err == nil || isCompanionSessionUnavailable(err) {
+		if err != nil {
+			status.QUICErrorCode = companionErrorCode(err)
+		}
 		configured, provisionErr := s.provisionCompanionQUICIfDue(ctx, deviceID)
 		if provisionErr != nil {
 			status.QUICMessage = "伴侣 ADB 通道可用，但 QUIC 配置下发失败：" + provisionErr.Error()
