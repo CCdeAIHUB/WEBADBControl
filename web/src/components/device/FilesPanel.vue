@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Download, File, Folder, FolderOpen, FolderPlus, FolderUp, HardDrive, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Download, File, Folder, FolderOpen, FolderPlus, FolderUp, HardDrive, RefreshCw, Trash2, Upload, X } from 'lucide-vue-next'
 import ConfirmDialog from '@/components/feedback/ConfirmDialog.vue'
 import { api, toAppError } from '@/services/api'
 import { canOpenEntry, formatFileSize, joinRemotePath, normalizeRemotePath, parentRemotePath, pathSegments, resolveOpenPath, sortFileEntries } from '@/services/deviceFiles'
@@ -16,6 +16,10 @@ const creating = ref(false)
 const newFolderName = ref('')
 const pendingDelete = ref<DeviceFileEntry | null>(null)
 const fileInput = ref<HTMLInputElement>()
+interface DownloadJob { id: string; fileName: string; state: 'queued'|'running'|'completed'|'failed'; bytesTotal: number; bytesTransferred: number; progress: number; error?: string }
+const downloadJob = ref<DownloadJob | null>(null)
+let downloadTimer = 0
+let downloadAbort: AbortController | undefined
 
 const sortedEntries = computed(() => sortFileEntries(entries.value))
 const breadcrumbs = computed(() => pathSegments(currentPath.value))
@@ -86,12 +90,51 @@ async function removePending() {
   }
 }
 
-function download(entry: DeviceFileEntry) {
+async function download(entry: DeviceFileEntry) {
   if (entry.type === 'directory') return
-  location.href = `/api/v1/devices/${encodeURIComponent(props.deviceId)}/files/download?path=${encodeURIComponent(entry.path)}`
+  cancelDownload(false)
+  try {
+    downloadJob.value = await api<DownloadJob>(`/devices/${encodeURIComponent(props.deviceId)}/files/downloads`, { method: 'POST', body: JSON.stringify({ path: entry.path }) })
+    downloadTimer = window.setInterval(pollDownload, 500)
+    await pollDownload()
+  } catch (error) { ui.failure(toAppError(error)) }
+}
+
+async function pollDownload() {
+  const job = downloadJob.value
+  if (!job || job.state === 'completed' || job.state === 'failed') return
+  try {
+    const current = await api<DownloadJob>(`/devices/${encodeURIComponent(props.deviceId)}/files/downloads/${job.id}`)
+    downloadJob.value = current
+    if (current.state === 'completed') { window.clearInterval(downloadTimer); await saveCompletedDownload(current) }
+    else if (current.state === 'failed') { window.clearInterval(downloadTimer); ui.notify('下载失败', current.error || '设备文件传输失败', 'danger') }
+  } catch (error) { window.clearInterval(downloadTimer); ui.failure(toAppError(error)) }
+}
+
+async function saveCompletedDownload(job: DownloadJob) {
+  downloadAbort = new AbortController()
+  const response = await fetch(`/api/v1/devices/${encodeURIComponent(props.deviceId)}/files/downloads/${job.id}/content`, { credentials: 'same-origin', signal: downloadAbort.signal })
+  if (!response.ok || !response.body) throw new Error(`下载响应失败（${response.status}）`)
+  const total = Number(response.headers.get('content-length')) || job.bytesTotal
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let received = 0
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break
+    chunks.push(value); received += value.byteLength
+    downloadJob.value = { ...job, bytesTotal: total, bytesTransferred: received, progress: total ? received / total * 100 : 100 }
+  }
+  const url = URL.createObjectURL(new Blob(chunks as BlobPart[])); const link = document.createElement('a')
+  link.href = url; link.download = job.fileName; link.click(); URL.revokeObjectURL(url)
+  ui.notify('下载完成', job.fileName, 'success')
+}
+
+function cancelDownload(removeRemote = true) {
+  window.clearInterval(downloadTimer); downloadAbort?.abort(); downloadAbort = undefined
+  const id = downloadJob.value?.id; downloadJob.value = null
+  if (removeRemote && id) void api(`/devices/${encodeURIComponent(props.deviceId)}/files/downloads/${id}`, { method: 'DELETE' }).catch(() => undefined)
 }
 
 onMounted(() => load())
+onBeforeUnmount(() => cancelDownload())
 </script>
 
 <template>
@@ -111,6 +154,11 @@ onMounted(() => load())
           <button class="btn-primary" @click="fileInput?.click()"><Upload :size="15" />上传文件</button>
           <input ref="fileInput" type="file" class="hidden" @change="upload" />
         </div>
+      </div>
+      <div v-if="downloadJob" class="mt-4 rounded-xl border border-brand-200 bg-brand-50/70 p-3 dark:border-brand-500/20 dark:bg-brand-500/8">
+        <div class="flex items-center gap-3 text-xs"><Download :size="15" class="text-brand-600"/><span class="min-w-0 flex-1 truncate font-semibold">{{ downloadJob.fileName }}</span><span class="tabular-nums text-slate-500">{{ formatFileSize(downloadJob.bytesTransferred) }}<template v-if="downloadJob.bytesTotal"> / {{ formatFileSize(downloadJob.bytesTotal) }}</template> · {{ Math.min(100, downloadJob.progress).toFixed(0) }}%</span><button class="icon-button !size-7" title="取消并清理下载" @click="cancelDownload()"><X :size="14"/></button></div>
+        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"><div class="h-full rounded-full bg-brand-600 transition-[width] duration-300" :style="{ width: `${Math.max(2, Math.min(100, downloadJob.progress))}%` }"/></div>
+        <p class="mt-2 text-[11px] text-slate-500">设备到服务器使用独立 ADB 传输通道，不会阻塞设备发现与控制。</p>
       </div>
       <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
         <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-white/10 dark:bg-white/4">

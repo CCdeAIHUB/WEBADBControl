@@ -34,6 +34,7 @@ type CommandOutput struct {
 
 type Service struct {
 	core                  coreipc.Caller
+	transferCore          coreipc.Caller
 	companionRequirement  CompanionRequirement
 	companionUpgradeLocks sync.Map
 	companionPublicHost   string
@@ -53,6 +54,13 @@ func WithCompanionRequirement(requirement CompanionRequirement) ServiceOption {
 
 func WithCompanionPublicHost(host string) ServiceOption {
 	return func(service *Service) { service.companionPublicHost = strings.TrimSpace(host) }
+}
+
+// WithTransferCore assigns a dedicated Core process for long-running ADB file
+// transfers. Keeping these calls away from the ordered control IPC prevents a
+// large pull/push from blocking discovery, status refresh and device actions.
+func WithTransferCore(core coreipc.Caller) ServiceOption {
+	return func(service *Service) { service.transferCore = core }
 }
 
 func NewService(core coreipc.Caller, options ...ServiceOption) *Service {
@@ -92,13 +100,25 @@ func (s *Service) EnableDeviceCatalogPersistence(path string) error {
 func (s *Service) SetLogger(logger *slog.Logger) { s.logger = logger }
 
 func (s *Service) Exec(ctx context.Context, args []string) (CommandOutput, error) {
+	return s.execWith(ctx, s.core, args)
+}
+
+func (s *Service) ExecTransfer(ctx context.Context, args []string) (CommandOutput, error) {
+	caller := s.transferCore
+	if caller == nil {
+		caller = s.core
+	}
+	return s.execWith(ctx, caller, args)
+}
+
+func (s *Service) execWith(ctx context.Context, caller coreipc.Caller, args []string) (CommandOutput, error) {
 	for _, arg := range args {
 		if strings.ContainsRune(arg, 0) {
 			return CommandOutput{}, apperror.New("ADB_ARGS_CONTAIN_NUL", "ADB 参数包含非法字符", "device.service", false)
 		}
 	}
 	var output CommandOutput
-	if err := s.core.Call(ctx, "adb.exec", map[string]any{"args": args}, &output); err != nil {
+	if err := caller.Call(ctx, "adb.exec", map[string]any{"args": args}, &output); err != nil {
 		return CommandOutput{}, err
 	}
 	if output.ExitCode != 0 {

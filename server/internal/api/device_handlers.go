@@ -578,7 +578,7 @@ func (s *Server) uploadFile(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	remoteFile := strings.TrimRight(remote, "/") + "/" + filepath.Base(header.Filename)
-	if _, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "push", path, remoteFile)); err != nil {
+	if _, err := s.devices.ExecTransfer(request.Context(), device.DeviceArgs(request.PathValue("id"), "push", path, remoteFile)); err != nil {
 		writeError(writer, http.StatusBadGateway, err)
 		return
 	}
@@ -625,7 +625,7 @@ func (s *Server) downloadFile(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	defer os.Remove(path)
-	if _, err := s.devices.Exec(request.Context(), device.DeviceArgs(request.PathValue("id"), "pull", remote, path)); err != nil {
+	if _, err := s.devices.ExecTransfer(request.Context(), device.DeviceArgs(request.PathValue("id"), "pull", remote, path)); err != nil {
 		writeError(writer, http.StatusBadGateway, err)
 		return
 	}

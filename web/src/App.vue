@@ -5,7 +5,9 @@ import ToastStack from '@/components/feedback/ToastStack.vue'
 
 <template>
   <AppShell>
-    <RouterView />
+    <RouterView v-slot="{ Component }">
+      <Transition name="page" mode="out-in"><component :is="Component" /></Transition>
+    </RouterView>
   </AppShell>
   <ToastStack />
 </template>

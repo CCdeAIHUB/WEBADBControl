@@ -13,6 +13,12 @@ interface Snapshot {
   storageUsedKb: number
   temperaturesC: Record<string, number>
   uptimeSeconds: number
+  brand: string; model: string; device: string; androidVersion: string; sdk: string; abi: string
+  cpuModel: string; cpuCores: number; cpuMaxFrequenciesKHz: number[]
+  batteryLevel: number; batteryStatus: number; batteryTemperatureC: number
+  swapTotalKb: number; swapFreeKb: number; zramDiskBytes: number; loadAverage: string
+  gpuAccess: string; gpuUsagePercent: number; gpuCurrentFrequencyHz: number; gpuMaxFrequencyHz: number; gpuMemoryBytes: number
+  refreshRateHz: number
 }
 
 interface MonitorStatus {
@@ -33,7 +39,13 @@ const samples = ref<Snapshot[]>([])
 const loading = ref(false)
 const monitor = ref<MonitorStatus | null>(null)
 const monitorOpen = ref(false)
-const selectedMetrics = ref(['cpu', 'memory', 'storage', 'temperature'])
+const metricOptions = [
+  { id:'cpu.usage', label:'CPU 占用' }, { id:'cpu.averagefrequency', label:'CPU 平均频率' },
+  { id:'memory.physical', label:'物理内存' }, { id:'memory.extended', label:'扩展内存' },
+  { id:'gpu.usage', label:'GPU 占用' }, { id:'gpu.frequency', label:'GPU 频率' }, { id:'gpu.memory', label:'GPU 内存' },
+  { id:'temperature.max', label:'最高温度' }, { id:'display.refresh', label:'屏幕刷新率' }, { id:'display.appfps', label:'前台应用 FPS' },
+]
+const selectedMetrics = ref(metricOptions.map(item => item.id))
 const canvas = ref<HTMLCanvasElement>()
 let timer = 0
 let resizeObserver: ResizeObserver | undefined
@@ -46,6 +58,11 @@ const averageCPU = computed(() => {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length / 1_000_000 : 0
 })
 const maximumTemperature = computed(() => Math.max(0, ...Object.values(latest.value?.temperaturesC ?? {})))
+const cpuUsage = computed(() => {
+  const current = latest.value?.cpuFrequenciesKHz ?? []; const maximum = latest.value?.cpuMaxFrequenciesKHz ?? []
+  const values = current.map((value, index) => maximum[index] ? Math.min(100, value / maximum[index] * 100) : 0).filter(Boolean)
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+})
 
 async function collectOnce() {
   loading.value = true
@@ -108,6 +125,7 @@ function draw() {
   }
   drawSeries(samples.value.map(item => item.memoryTotalKb ? (item.memoryTotalKb - item.memoryAvailableKb) / item.memoryTotalKb * 100 : 0), '#22c55e')
   drawSeries(samples.value.map(item => Math.min(100, Math.max(0, ...Object.values(item.temperaturesC)) || 0)), '#f59e0b')
+  drawSeries(samples.value.map(item => item.gpuUsagePercent || 0), '#8b5cf6')
 }
 
 function formatStorage(valueKb = 0) { return valueKb ? `${(valueKb / 1024 / 1024).toFixed(1)} GB` : '—' }
@@ -151,6 +169,11 @@ onBeforeUnmount(() => { stopPolling(); resizeObserver?.disconnect() })
       ]" :key="metric.label" class="card p-4"><div class="flex items-center"><div class="grid size-8 place-items-center rounded-lg" :class="metric.color"><component :is="metric.icon" :size="16" /></div><span class="ml-2 text-xs text-slate-500">{{ metric.label }}</span></div><div class="mt-4 text-xl font-semibold">{{ metric.value }}</div></div>
     </section>
     <section v-if="latest" class="grid gap-4 xl:grid-cols-2"><div class="card p-5"><h3 class="section-title m-0">处理器核心</h3><div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><div v-for="(frequency,index) in latest.cpuFrequenciesKHz" :key="index" class="rounded-lg bg-slate-50 p-3 dark:bg-white/4"><div class="text-[10px] text-slate-400">CPU {{ index }}</div><div class="mt-1 text-sm font-semibold">{{ (frequency/1_000_000).toFixed(2) }} GHz</div></div><div v-if="!latest.cpuFrequenciesKHz.length" class="text-xs text-slate-400">设备未公开核心频率</div></div></div><div class="card p-5"><h3 class="section-title m-0">资源明细</h3><dl class="mt-4 space-y-3 text-xs"><div class="flex"><dt class="text-slate-500">可用内存</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.memoryAvailableKb) }}</dd></div><div class="flex"><dt class="text-slate-500">总内存</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.memoryTotalKb) }}</dd></div><div class="flex"><dt class="text-slate-500">数据分区已用</dt><dd class="ml-auto font-medium">{{ formatStorage(latest.storageUsedKb) }} / {{ formatStorage(latest.storageTotalKb) }}</dd></div><div class="flex"><dt class="text-slate-500">运行时长</dt><dd class="ml-auto font-medium">{{ (latest.uptimeSeconds/3600).toFixed(1) }} 小时</dd></div></dl></div></section>
-    <div v-if="monitorOpen" class="fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm" @click.self="monitorOpen = false"><section class="card flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden shadow-2xl"><div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/7"><Activity :size="17" class="mr-1 text-brand-600" /><div><h3 class="section-title m-0">硬件监控</h3><p class="mt-1 text-xs text-slate-400">关闭窗口不会停止 Core 后台记录任务</p></div><button class="btn-primary ml-auto" :disabled="loading || !selectedMetrics.length" @click="toggleRecording">{{ monitor?.running ? '停止记录' : '开始后台记录' }}</button><button class="btn-secondary" :disabled="!samples.length" @click="exportCSV"><Download :size="15" />导出 CSV</button><button class="icon-button" title="关闭" @click="monitorOpen=false"><X :size="17"/></button></div><div class="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-3 dark:border-white/7"><label v-for="metric in [{id:'cpu',label:'CPU'},{id:'memory',label:'内存'},{id:'storage',label:'存储'},{id:'temperature',label:'温度'}]" :key="metric.id" class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs dark:border-white/10"><input v-model="selectedMetrics" type="checkbox" :value="metric.id" :disabled="monitor?.running" class="accent-brand-600"/>{{ metric.label }}</label></div><div class="min-h-0 flex-1 overflow-auto"><div v-if="loading && !samples.length" class="grid h-72 place-items-center text-sm text-slate-400"><RefreshCw :size="20" class="mb-2 animate-spin"/>正在读取硬件信息…</div><div v-else class="h-96 p-5"><canvas ref="canvas" class="size-full" aria-label="设备性能趋势图" /></div><p v-if="monitor?.lastError" class="border-t border-rose-200 bg-rose-50 px-5 py-3 text-xs text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300">最近一次采样失败：{{ monitor.lastError }}（{{ monitor.lastErrorCode }}），后台任务会在下一周期继续。</p></div></section></div>
+    <section v-if="latest" class="grid gap-4 xl:grid-cols-3">
+      <div class="card p-5"><h3 class="section-title m-0">设备与系统</h3><dl class="mt-4 space-y-3 text-xs"><div class="flex"><dt class="text-slate-500">品牌 / 型号</dt><dd class="ml-auto font-semibold">{{ latest.brand || '—' }} · {{ latest.model || '—' }}</dd></div><div class="flex"><dt class="text-slate-500">Android / SDK</dt><dd class="ml-auto font-semibold">{{ latest.androidVersion || '—' }} / {{ latest.sdk || '—' }}</dd></div><div class="flex"><dt class="text-slate-500">设备代号 / ABI</dt><dd class="ml-auto font-mono">{{ latest.device || '—' }} · {{ latest.abi || '—' }}</dd></div><div class="flex"><dt class="text-slate-500">屏幕刷新率</dt><dd class="ml-auto font-semibold">{{ latest.refreshRateHz ? `${latest.refreshRateHz.toFixed(1)} Hz` : '—' }}</dd></div></dl></div>
+      <div class="card p-5"><h3 class="section-title m-0">处理器与图形</h3><dl class="mt-4 space-y-3 text-xs"><div class="flex"><dt class="text-slate-500">CPU 型号</dt><dd class="ml-auto max-w-[65%] text-right font-semibold">{{ latest.cpuModel || '—' }}</dd></div><div class="flex"><dt class="text-slate-500">核心 / 估算占用</dt><dd class="ml-auto font-semibold">{{ latest.cpuCores || latest.cpuFrequenciesKHz.length }} / {{ cpuUsage.toFixed(1) }}%</dd></div><div class="flex"><dt class="text-slate-500">GPU 占用 / 频率</dt><dd class="ml-auto font-semibold">{{ latest.gpuAccess === 'available' ? `${latest.gpuUsagePercent.toFixed(1)}% / ${(latest.gpuCurrentFrequencyHz/1e6).toFixed(0)} MHz` : '设备未开放' }}</dd></div><div class="flex"><dt class="text-slate-500">系统负载</dt><dd class="ml-auto font-mono">{{ latest.loadAverage || '—' }}</dd></div></dl></div>
+      <div class="card p-5"><h3 class="section-title m-0">电池与扩展内存</h3><dl class="mt-4 space-y-3 text-xs"><div class="flex"><dt class="text-slate-500">电量 / 电池温度</dt><dd class="ml-auto font-semibold">{{ latest.batteryLevel || '—' }}% · {{ latest.batteryTemperatureC ? `${latest.batteryTemperatureC.toFixed(1)} °C` : '—' }}</dd></div><div class="flex"><dt class="text-slate-500">交换空间</dt><dd class="ml-auto font-semibold">{{ formatStorage(latest.swapTotalKb-latest.swapFreeKb) }} / {{ formatStorage(latest.swapTotalKb) }}</dd></div><div class="flex"><dt class="text-slate-500">ZRAM</dt><dd class="ml-auto font-semibold">{{ latest.zramDiskBytes ? `${(latest.zramDiskBytes/1024/1024/1024).toFixed(1)} GB` : '—' }}</dd></div><div class="flex"><dt class="text-slate-500">GPU 内存</dt><dd class="ml-auto font-semibold">{{ latest.gpuMemoryBytes ? `${(latest.gpuMemoryBytes/1024/1024).toFixed(0)} MB` : '—' }}</dd></div></dl></div>
+    </section>
+    <div v-if="monitorOpen" class="fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm" @click.self="monitorOpen = false"><section class="card flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden shadow-2xl"><div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/7"><Activity :size="17" class="mr-1 text-brand-600" /><div><h3 class="section-title m-0">硬件监控</h3><p class="mt-1 text-xs text-slate-400">关闭窗口不会停止 Core 后台记录任务</p></div><button class="btn-primary ml-auto" :disabled="loading || !selectedMetrics.length" @click="toggleRecording">{{ monitor?.running ? '停止记录' : '开始后台记录' }}</button><button class="btn-secondary" :disabled="!samples.length" @click="exportCSV"><Download :size="15" />导出 CSV</button><button class="icon-button" title="关闭" @click="monitorOpen=false"><X :size="17"/></button></div><div class="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-3 dark:border-white/7"><label v-for="metric in metricOptions" :key="metric.id" class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs dark:border-white/10"><input v-model="selectedMetrics" type="checkbox" :value="metric.id" :disabled="monitor?.running" class="accent-brand-600"/>{{ metric.label }}</label></div><div class="min-h-0 flex-1 overflow-auto"><div v-if="loading && !samples.length" class="grid h-72 place-items-center text-sm text-slate-400"><RefreshCw :size="20" class="mb-2 animate-spin"/>正在读取硬件信息…</div><div v-else class="h-96 p-5"><canvas ref="canvas" class="size-full" aria-label="设备性能趋势图" /></div><p v-if="monitor?.lastError" class="border-t border-rose-200 bg-rose-50 px-5 py-3 text-xs text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300">最近一次采样失败：{{ monitor.lastError }}（{{ monitor.lastErrorCode }}），后台任务会在下一周期继续。</p></div></section></div>
   </div>
 </template>

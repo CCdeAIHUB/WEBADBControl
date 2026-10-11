@@ -30,10 +30,11 @@ type Server struct {
 	auth       *auth.Manager
 	logs       *observability.Service
 	logger     *slog.Logger
+	transfers  *fileTransferManager
 }
 
 func New(config config.Config, devices *device.Service, automation *automation.Service, settings *settings.Store, ai *ai.Service, auth *auth.Manager, logs *observability.Service, logger *slog.Logger) *Server {
-	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, auth: auth, logs: logs, logger: logger}
+	return &Server{config: config, devices: devices, automation: automation, settings: settings, ai: ai, auth: auth, logs: logs, logger: logger, transfers: newFileTransferManager(config.DataDir, devices, logger)}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -91,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 	router.HandleFunc("POST /api/v1/devices/{id}/files/mkdir", s.createDirectory)
 	router.HandleFunc("POST /api/v1/devices/{id}/files/upload", s.uploadFile)
 	router.HandleFunc("GET /api/v1/devices/{id}/files/download", s.downloadFile)
+	router.HandleFunc("POST /api/v1/devices/{id}/files/downloads", s.startFileDownload)
+	router.HandleFunc("GET /api/v1/devices/{id}/files/downloads/{transferId}", s.fileDownloadStatus)
+	router.HandleFunc("GET /api/v1/devices/{id}/files/downloads/{transferId}/content", s.fileDownloadContent)
+	router.HandleFunc("DELETE /api/v1/devices/{id}/files/downloads/{transferId}", s.cancelFileDownload)
 	router.HandleFunc("GET /api/v1/devices/{id}/capabilities", s.capabilities)
 	router.HandleFunc("GET /api/v1/devices/{id}/permissions", s.permissions)
 	router.HandleFunc("POST /api/v1/devices/{id}/capabilities/invoke", s.invokeCapability)

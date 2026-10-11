@@ -1,4 +1,11 @@
 @import "tailwindcss";
+
+.page-enter-active,.page-leave-active{transition:opacity .18s ease,transform .18s ease}
+.page-enter-from{opacity:0;transform:translateY(6px)}
+.page-leave-to{opacity:0;transform:translateY(-3px)}
+button,a,[role="button"]{transition-property:color,background-color,border-color,box-shadow,transform,opacity;transition-duration:160ms;transition-timing-function:ease}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.975)}
+@media (prefers-reduced-motion:reduce){.page-enter-active,.page-leave-active,button,a,[role="button"]{transition:none!important;animation:none!important}}
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {

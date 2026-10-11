@@ -70,14 +70,36 @@ func parseContextualKeyguardShowing(output string, state LockState) LockState {
 }
 
 type HardwareSnapshot struct {
-	CapturedAt        time.Time          `json:"capturedAt"`
-	CPUFrequenciesKHz []int64            `json:"cpuFrequenciesKHz"`
-	MemoryTotalKB     int64              `json:"memoryTotalKb"`
-	MemoryAvailableKB int64              `json:"memoryAvailableKb"`
-	StorageTotalKB    int64              `json:"storageTotalKb"`
-	StorageUsedKB     int64              `json:"storageUsedKb"`
-	TemperaturesC     map[string]float64 `json:"temperaturesC"`
-	UptimeSeconds     float64            `json:"uptimeSeconds"`
+	CapturedAt            time.Time          `json:"capturedAt"`
+	CPUFrequenciesKHz     []int64            `json:"cpuFrequenciesKHz"`
+	MemoryTotalKB         int64              `json:"memoryTotalKb"`
+	MemoryAvailableKB     int64              `json:"memoryAvailableKb"`
+	StorageTotalKB        int64              `json:"storageTotalKb"`
+	StorageUsedKB         int64              `json:"storageUsedKb"`
+	TemperaturesC         map[string]float64 `json:"temperaturesC"`
+	UptimeSeconds         float64            `json:"uptimeSeconds"`
+	Brand                 string             `json:"brand"`
+	Model                 string             `json:"model"`
+	Device                string             `json:"device"`
+	AndroidVersion        string             `json:"androidVersion"`
+	SDK                   string             `json:"sdk"`
+	ABI                   string             `json:"abi"`
+	CPUModel              string             `json:"cpuModel"`
+	CPUCores              int                `json:"cpuCores"`
+	CPUMaxFrequenciesKHz  []int64            `json:"cpuMaxFrequenciesKHz"`
+	BatteryLevel          int                `json:"batteryLevel"`
+	BatteryStatus         int                `json:"batteryStatus"`
+	BatteryTemperatureC   float64            `json:"batteryTemperatureC"`
+	SwapTotalKB           int64              `json:"swapTotalKb"`
+	SwapFreeKB            int64              `json:"swapFreeKb"`
+	ZramDiskBytes         int64              `json:"zramDiskBytes"`
+	LoadAverage           string             `json:"loadAverage"`
+	GPUAccess             string             `json:"gpuAccess"`
+	GPUUsagePercent       float64            `json:"gpuUsagePercent"`
+	GPUCurrentFrequencyHz int64              `json:"gpuCurrentFrequencyHz"`
+	GPUMaxFrequencyHz     int64              `json:"gpuMaxFrequencyHz"`
+	GPUMemoryBytes        int64              `json:"gpuMemoryBytes"`
+	RefreshRateHz         float64            `json:"refreshRateHz"`
 }
 
 func ParseHardwareSnapshot(output string) HardwareSnapshot {
@@ -88,6 +110,61 @@ func ParseHardwareSnapshot(output string) HardwareSnapshot {
 			continue
 		}
 		switch key {
+		case "brand":
+			snapshot.Brand = value
+		case "model":
+			snapshot.Model = value
+		case "device":
+			snapshot.Device = value
+		case "android":
+			snapshot.AndroidVersion = value
+		case "sdk":
+			snapshot.SDK = value
+		case "abi":
+			snapshot.ABI = value
+		case "cpu_model":
+			snapshot.CPUModel = value
+		case "cpu_cores":
+			snapshot.CPUCores, _ = strconv.Atoi(strings.TrimSpace(value))
+		case "cpu_max_freqs":
+			snapshot.CPUMaxFrequenciesKHz = parseNamedInt64s(value)
+		case "battery_level":
+			snapshot.BatteryLevel, _ = strconv.Atoi(strings.TrimSpace(value))
+		case "battery_status":
+			snapshot.BatteryStatus, _ = strconv.Atoi(strings.TrimSpace(value))
+		case "battery_temp":
+			raw, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			snapshot.BatteryTemperatureC = raw / 10
+		case "swap_total_kb":
+			snapshot.SwapTotalKB, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "swap_free_kb":
+			snapshot.SwapFreeKB, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "zram_disk_bytes":
+			snapshot.ZramDiskBytes, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "load":
+			snapshot.LoadAverage = value
+		case "gpu_access":
+			snapshot.GPUAccess = value
+		case "gpu_usage":
+			snapshot.GPUUsagePercent, _ = strconv.ParseFloat(strings.TrimSpace(value), 64)
+		case "gpu_cur_freq":
+			snapshot.GPUCurrentFrequencyHz = normalizeHardwareFrequency(value)
+		case "gpu_max_freq":
+			snapshot.GPUMaxFrequencyHz = normalizeHardwareFrequency(value)
+		case "gpu_memory_bytes":
+			snapshot.GPUMemoryBytes, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "refresh_rate":
+			snapshot.RefreshRateHz, _ = strconv.ParseFloat(strings.TrimSpace(value), 64)
+		case "cpu_freqs":
+			snapshot.CPUFrequenciesKHz = parseNamedInt64s(value)
+		case "mem_total_kb":
+			snapshot.MemoryTotalKB, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "mem_available_kb":
+			snapshot.MemoryAvailableKB, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		case "thermal_service", "temperatures":
+			if value != "" {
+				parseTemperaturesInto(snapshot.TemperaturesC, value)
+			}
 		case "CPU":
 			for _, raw := range strings.Split(value, ",") {
 				if frequency, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && frequency > 0 {
@@ -138,6 +215,45 @@ func ParseHardwareSnapshot(output string) HardwareSnapshot {
 		}
 	}
 	return snapshot
+}
+
+func parseNamedInt64s(value string) []int64 {
+	result := []int64{}
+	for _, item := range strings.Split(value, ",") {
+		_, raw, ok := strings.Cut(item, ":")
+		if !ok {
+			continue
+		}
+		if number, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && number > 0 {
+			result = append(result, number)
+		}
+	}
+	return result
+}
+
+func parseTemperaturesInto(target map[string]float64, value string) {
+	for _, item := range strings.Split(value, ",") {
+		name, raw, ok := strings.Cut(item, ":")
+		if !ok || strings.TrimSpace(name) == "" {
+			continue
+		}
+		temperature, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil {
+			continue
+		}
+		if temperature > 200 {
+			temperature /= 1000
+		}
+		target[strings.TrimSpace(name)] = temperature
+	}
+}
+
+func normalizeHardwareFrequency(value string) int64 {
+	number, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if number > 0 && number < 10_000_000 {
+		number *= 1000
+	}
+	return number
 }
 
 type DiscoveredService struct {

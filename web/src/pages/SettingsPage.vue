@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AlertTriangle, Bot, KeyRound, Monitor, Plus, Save, Server, ShieldCheck, Trash2, Wifi } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -34,7 +34,20 @@ watch(() => settings.value.theme, applyTheme)
 
 function addModel() {
   const model: AIModel = { id: crypto.randomUUID(), name: '新模型', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1', apiKey: '', vision: true }
-  settings.value.aiModels.push(model)
+  settings.value = { ...settings.value, aiModels: [...settings.value.aiModels, model] }
+  void nextTick(() => {
+    const modelInputs = document.querySelectorAll<HTMLInputElement>('section input')
+    const input = document.querySelector<HTMLInputElement>(`[data-model-id="${model.id}"] input`) ?? modelInputs.item(Math.max(0, modelInputs.length - 4))
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    input?.focus(); input?.select()
+    ui.notify('已添加模型配置', '填写接口信息后点击“保存设置”即可生效。', 'success')
+  })
+}
+
+function jumpTo(id: string) {
+  const indexes: Record<string, number> = { 'settings-security': 0, 'settings-users': 1, 'settings-remote': 2, 'settings-appearance': 3, 'settings-ai': 4 }
+  const target = document.getElementById(id) ?? document.querySelectorAll<HTMLElement>('.mx-auto > section')[indexes[id]]
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function load() {
@@ -102,7 +115,8 @@ onMounted(load)
 <template>
   <PageHeader eyebrow="Settings" title="系统设置" description="管理登录密码、界面偏好、屏幕刷新与服务端 AI 模型。"><template #actions><button class="btn-primary" @click="save"><Save :size="15" />保存设置</button></template></PageHeader>
   <div class="mx-auto grid max-w-5xl gap-4">
-    <section class="card p-5" :class="mustChangePassword ? '!border-amber-300 bg-amber-50/60 dark:!border-amber-500/30 dark:bg-amber-500/5' : ''">
+    <nav class="card sticky top-3 z-20 flex gap-1 overflow-x-auto p-2 shadow-sm" aria-label="设置分类"><button v-for="item in [{id:'settings-security',label:'管理安全'},{id:'settings-users',label:'用户与设备'},{id:'settings-remote',label:'远程服务'},{id:'settings-appearance',label:'外观刷新'},{id:'settings-ai',label:'AI 模型'}]" :key="item.id" class="shrink-0 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-brand-500/10 dark:hover:text-brand-300" @click="jumpTo(item.id)">{{ item.label }}</button></nav>
+    <section id="settings-security" class="card scroll-mt-24 p-5" :class="mustChangePassword ? '!border-amber-300 bg-amber-50/60 dark:!border-amber-500/30 dark:bg-amber-500/5' : ''">
       <div class="flex items-start gap-3">
         <div class="grid size-9 shrink-0 place-items-center rounded-lg" :class="mustChangePassword ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300' : 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300'"><AlertTriangle v-if="mustChangePassword" :size="18" /><KeyRound v-else :size="18" /></div>
         <div><h2 class="section-title m-0">管理密码</h2><p class="mt-1 text-xs leading-5" :class="mustChangePassword ? 'text-amber-700 dark:text-amber-300' : 'text-slate-400'">{{ mustChangePassword ? '当前仍在使用默认密码 admin，建议尽快修改以保护管理后台。' : '修改登录管理后台所使用的密码，修改后其他旧会话会立即失效。' }}</p></div>
@@ -115,13 +129,13 @@ onMounted(load)
       <div class="mt-4 flex flex-wrap items-center gap-3"><button class="btn-primary" :disabled="passwordBusy || !currentPassword || !newPassword || !confirmPassword" @click="changeAdminPassword"><KeyRound :size="15" />{{ passwordBusy ? '正在更新…' : '修改管理密码' }}</button><p v-if="passwordError" class="text-xs text-red-600" role="alert">{{ passwordError }}</p></div>
     </section>
 
-    <AccountManagement v-if="sessionLoaded && !mustChangePassword" />
+    <div v-if="sessionLoaded && !mustChangePassword" id="settings-users" class="scroll-mt-24"><AccountManagement /></div>
     <section v-else-if="sessionLoaded" class="card border-amber-200 p-5 dark:border-amber-500/20">
       <h2 class="section-title m-0">远程用户与设备权限</h2>
       <p class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">请先修改默认管理员密码，再创建远程用户或分配设备。</p>
     </section>
 
-    <section class="card p-5">
+    <section id="settings-remote" class="card scroll-mt-24 p-5">
 	  <div class="flex flex-col items-start gap-3 sm:flex-row"><div class="grid size-9 shrink-0 place-items-center rounded-lg bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"><Wifi :size="18" /></div><div><h2 class="section-title m-0">远程控制服务</h2><p class="mt-1 text-xs leading-5 text-slate-400">启用 Rust Core 的 QUIC/TLS 1.3 远程入口；保存后重启服务生效。</p></div><UiSwitch v-model="settings.remoteEnabled" class="sm:ml-auto" label="启用远程控制" :disabled="mustChangePassword" /></div>
       <div class="mt-5 grid gap-4 sm:grid-cols-2"><label class="text-xs font-medium">监听 IP<input v-model="settings.remoteAddress" class="field mt-2 font-mono" :disabled="!settings.remoteEnabled" placeholder="0.0.0.0" /></label><label class="text-xs font-medium">监听端口<UiNumberInput v-model="settings.remotePort" :min="1024" :max="65535" class="mt-2" aria-label="远程监听端口" /></label></div>
 	  <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/7 dark:text-amber-300">该端口使用 UDP，不是 Web HTTP 端口。请放行对应 UDP 防火墙规则；内置管理员不能通过远程入口登录，远程客户端仅接受下方创建的用户。</div>

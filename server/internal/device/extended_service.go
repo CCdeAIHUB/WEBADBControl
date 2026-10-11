@@ -211,11 +211,19 @@ func (s *Service) Unlock(ctx context.Context, deviceID, pin string) error {
 }
 
 func (s *Service) Hardware(ctx context.Context, deviceID string) (HardwareSnapshot, error) {
-	command := `echo CPU=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null | tr '\n' ','); ` +
+	command := `echo brand=$(getprop ro.product.brand); echo model=$(getprop ro.product.model); echo device=$(getprop ro.product.device); echo android=$(getprop ro.build.version.release); echo sdk=$(getprop ro.build.version.sdk); echo abi=$(getprop ro.product.cpu.abi); ` +
+		`cpu_model=$(getprop ro.soc.model); [ -n "$cpu_model" ] || cpu_model=$(getprop ro.board.platform); echo cpu_model="$cpu_model"; echo cpu_cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null); ` +
+		`echo cpu_freqs="$(for p in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && printf '%s:%s,' "$(basename $(dirname $(dirname $p)))" "$(cat $p)"; done)"; ` +
+		`echo cpu_max_freqs="$(for p in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do [ -r "$p" ] && printf '%s:%s,' "$(basename $(dirname $(dirname $p)))" "$(cat $p)"; done)"; ` +
+		`battery_dump="$(dumpsys battery)"; echo battery_level=$(printf '%s\n' "$battery_dump" | grep -m1 'level:' | cut -d: -f2-); echo battery_status=$(printf '%s\n' "$battery_dump" | grep -m1 'status:' | cut -d: -f2-); echo battery_temp=$(printf '%s\n' "$battery_dump" | grep -m1 'temperature:' | cut -d: -f2-); ` +
+		`echo mem_total_kb=$(awk '/MemTotal/ { print $2; exit }' /proc/meminfo); echo mem_available_kb=$(awk '/MemAvailable/ { print $2; exit }' /proc/meminfo); echo swap_total_kb=$(awk '/SwapTotal/ { print $2; exit }' /proc/meminfo); echo swap_free_kb=$(awk '/SwapFree/ { print $2; exit }' /proc/meminfo); echo zram_disk_bytes=$(cat /sys/block/zram0/disksize 2>/dev/null); echo load=$(cut -d' ' -f1-3 /proc/loadavg); ` +
+		`echo CPU=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null | tr '\n' ','); ` +
 		`echo MEM=$(grep -E '^(MemTotal|MemAvailable):' /proc/meminfo | tr '\n' '|'); ` +
 		`echo DISK=$(df -k /data 2>/dev/null | tail -n 1); ` +
 		`echo TEMP=$(for z in /sys/class/thermal/thermal_zone*; do echo "$(cat $z/type 2>/dev/null):$(cat $z/temp 2>/dev/null)"; done | tr '\n' ','); ` +
-		`echo UPTIME=$(cat /proc/uptime)`
+		`echo UPTIME=$(cat /proc/uptime); ` +
+		`gpu_path=$(find /sys/class/devfreq /sys/class/kgsl -maxdepth 2 -type f \( -name cur_freq -o -name gpuclk \) 2>/dev/null | head -n1); gpu_dir=$(dirname "$gpu_path"); [ -n "$gpu_path" ] && gpu_access=available || gpu_access=unsupported; echo gpu_access=$gpu_access; echo gpu_cur_freq=$(cat "$gpu_path" 2>/dev/null); echo gpu_max_freq=$(cat "$gpu_dir/max_freq" 2>/dev/null); echo gpu_usage=$(cat "$gpu_dir/load" 2>/dev/null | grep -o -E '[0-9]+([.][0-9]+)?' | head -n1); echo gpu_memory_bytes=$(dumpsys gpu 2>/dev/null | grep -m1 '^Global total:' | grep -o -E '[0-9]+' | head -n1); ` +
+		`display_dump="$(dumpsys display 2>/dev/null)"; echo refresh_rate=$(printf '%s\n' "$display_dump" | grep -m1 -E 'mRefreshRate|refreshRate' | grep -o -E '[0-9]+(\.[0-9]+)?' | head -n1)`
 	output, err := s.Exec(ctx, DeviceArgs(deviceID, "shell", command))
 	if err != nil {
 		return HardwareSnapshot{}, err

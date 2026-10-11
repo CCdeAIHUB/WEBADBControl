@@ -57,11 +57,27 @@ func main() {
 	}
 	defer transport.Close()
 	core := coreipc.NewClient(transport)
+	transferTransport, err := coreipc.StartProcessWithEnvAndStderr(
+		processContext,
+		applicationConfig.CoreBinary,
+		map[string]string{
+			"ADBCONTROL_REMOTE_DATA_DIR":  filepath.Join(applicationConfig.DataDir, "transfer-core"),
+			"ADBCONTROL_REMOTE_LISTEN":    "",
+			"ADBCONTROL_COMPANION_LISTEN": "",
+		},
+		io.MultiWriter(os.Stderr, coreDiagnosticWriter),
+	)
+	if err != nil {
+		logger.Error("transfer_core_start_failed", "error", err)
+		os.Exit(1)
+	}
+	defer transferTransport.Close()
+	transferCore := coreipc.NewClient(transferTransport)
 	devices := device.NewService(core, device.WithCompanionRequirement(device.CompanionRequirement{
 		APKPath:     applicationConfig.CompanionAPK,
 		VersionCode: applicationConfig.CompanionVersionCode,
 		VersionName: applicationConfig.CompanionVersionName,
-	}), device.WithCompanionPublicHost(applicationConfig.CompanionPublicHost))
+	}), device.WithCompanionPublicHost(applicationConfig.CompanionPublicHost), device.WithTransferCore(transferCore))
 	devices.SetLogger(logger)
 	if err := devices.EnableDeviceCatalogPersistence(filepath.Join(applicationConfig.DataDir, "devices.json")); err != nil {
 		logger.Error("device_catalog_recovery_failed", "error", err)
